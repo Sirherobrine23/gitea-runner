@@ -101,7 +101,7 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
 
-replace github.com/actions-oss/act-cli => gitea.com/actions-oss/act-cli v0.4.2-0.20260214162359-933c4a5bd50b
+replace github.com/actions-oss/act-cli => gitea.com/actions-oss/act-cli v0.4.2-0.20260220200604-40ee0f3ef6fc
 
 replace github.com/go-git/go-git/v5 => github.com/go-git/go-git/v5 v5.16.4
 

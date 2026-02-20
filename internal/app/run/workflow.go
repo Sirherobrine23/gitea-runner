@@ -12,7 +12,7 @@ import (
 	runnerv1 "code.gitea.io/actions-proto-go/runner/v1"
 	"github.com/actions-oss/act-cli/pkg/model"
 	"github.com/actions-oss/act-cli/pkg/schema"
-	"go.yaml.in/yaml/v4"
+	"gopkg.in/yaml.v3"
 )
 
 func generateWorkflow(task *runnerv1.Task) (*model.Workflow, string, error) {
@@ -52,7 +52,7 @@ func generateWorkflow(task *runnerv1.Task) (*model.Workflow, string, error) {
 	}
 
 	// TODO GITEA
-	// workflow.Jobs[jobID].RawNeeds = rawNeeds
+	workflow.Jobs[jobID].RawNeeds = rawNeeds
 
 	return workflow, jobID, nil
 }

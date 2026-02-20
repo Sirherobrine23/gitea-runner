@@ -5,6 +5,7 @@ package run
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/actions-oss/act-cli/pkg/artifactcache"
 	"github.com/actions-oss/act-cli/pkg/model"
 	"github.com/actions-oss/act-cli/pkg/runner"
+	"github.com/actions-oss/act-cli/pkg/schema"
 	"github.com/docker/docker/api/types/container"
 	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
@@ -149,13 +151,13 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		return err
 	}
 
-	plan := &model.Plan{}
+	// plan := &model.Plan{}
 
 	// TODO GITEA
-	// plan, err := model.CombineWorkflowPlanner(workflow).PlanJob(jobID)
-	// if err != nil {
-	// 	return err
-	// }
+	plan, err := model.CombineWorkflowPlanner(workflow).PlanJob(jobID)
+	if err != nil {
+		return err
+	}
 	job := workflow.GetJob(jobID)
 	reporter.ResetSteps(len(job.Steps))
 
@@ -202,15 +204,20 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 	r.envs["ACTIONS_RUNTIME_TOKEN"] = giteaRuntimeToken
 
 	// TODO GITEA
-	// eventJSON, err := json.Marshal(preset.Event)
-	// if err != nil {
-	// 	return err
-	// }
+	eventJSON, err := json.Marshal(preset.Event)
+	if err != nil {
+		return err
+	}
 
 	// maxLifetime := 3 * time.Hour
 	// if deadline, ok := ctx.Deadline(); ok {
 	// 	maxLifetime = time.Until(deadline)
 	// }
+
+	actCtx := map[string]interface{}{}
+	forgeCtx := task.Context.AsMap()
+	actCtx["github"] = forgeCtx
+	actCtx["gitea"] = forgeCtx
 
 	runnerConfig := &runner.Config{
 		// On Linux, Workdir will be like "/<parent_directory>/<owner>/<repo>"
@@ -226,12 +233,12 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		JSONLogger:      false,
 		Env:             r.envs,
 		Secrets:         task.Secrets,
-		GitHubInstance:  strings.TrimSuffix(r.client.Address(), "/"),
-		AutoRemove:      true,
-		NoSkipCheckout:  true,
+		// GitHubInstance:  strings.TrimSuffix(r.client.Address(), "/"),
+		AutoRemove:     true,
+		NoSkipCheckout: true,
 		// TODO GITEA
 		// PresetGitHubContext:   preset,
-		// EventJSON:             string(eventJSON),
+		EventJSON: string(eventJSON),
 		// ContainerNamePrefix:   fmt.Sprintf("GITEA-ACTIONS-TASK-%d", task.Id),
 		// ContainerMaxLifetime:  maxLifetime,
 		ContainerNetworkMode:  container.NetworkMode(r.cfg.Container.Network),
@@ -245,6 +252,17 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		// TODO GITEA
 		// ValidVolumes:          r.cfg.Container.ValidVolumes,
 		// InsecureSkipTLS:       r.cfg.Runner.Insecure,
+
+		GitHubServerURL:    strings.TrimSuffix(r.client.Address(), "/"),
+		GitHubAPIServerURL: strings.TrimSuffix(r.client.Address(), "/api/v1"),
+		// Invalid but ok
+		GitHubGraphQlAPIServerURL: strings.TrimSuffix(r.client.Address(), "/api/graphql"),
+		MainContextNames:          []string{"gitea", "github"},
+
+		Action: model.ActionConfig{
+			Schema: schema.GetGiteaActionSchema(),
+		},
+		ContextData: actCtx,
 	}
 
 	rr, err := runner.New(runnerConfig)
