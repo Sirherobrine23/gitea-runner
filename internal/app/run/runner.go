@@ -151,15 +151,20 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		return err
 	}
 
-	// plan := &model.Plan{}
-
 	// TODO GITEA
 	plan, err := model.CombineWorkflowPlanner(workflow).PlanJob(jobID)
 	if err != nil {
 		return err
 	}
 	job := workflow.GetJob(jobID)
-	reporter.ResetSteps(len(job.Steps))
+	var stepIds []string
+	for i, v := range job.Steps {
+		if v.ID == "" {
+			v.ID = fmt.Sprint(i)
+		}
+		stepIds = append(stepIds, v.ID)
+	}
+	reporter.SetStepIdMapping(stepIds...)
 
 	taskContext := task.Context.Fields
 
@@ -245,6 +250,10 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		ContainerOptions:      r.cfg.Container.Options,
 		ContainerDaemonSocket: r.cfg.Container.DockerHost,
 		Privileged:            r.cfg.Container.Privileged,
+
+		Platforms: map[string]string{
+			"dummy": "-self-hosted",
+		},
 		// TODO GITEA
 		// DefaultActionInstance: r.getDefaultActionsURL(ctx, task),
 		// PlatformPicker:        r.labels.PickPlatform,
@@ -278,9 +287,9 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 	// ctx = common.WithLoggerHook(ctx, reporter)
 	ctx = runner.WithJobLoggerFactory(ctx, &JobLoggerFactory{reporter: reporter})
 
-	if !log.IsLevelEnabled(log.DebugLevel) {
-		ctx = runner.WithJobLoggerFactory(ctx, NullLogger{})
-	}
+	// if !log.IsLevelEnabled(log.DebugLevel) {
+	// 	ctx = runner.WithJobLoggerFactory(ctx, NullLogger{})
+	// }
 
 	execErr := executor(ctx)
 	reporter.SetOutputs(job.Outputs)

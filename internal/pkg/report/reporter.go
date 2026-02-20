@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,8 @@ type Reporter struct {
 
 	debugOutputEnabled  bool
 	stopCommandEndToken string
+
+	stepIds []string
 }
 
 func NewReporter(ctx context.Context, cancel context.CancelFunc, client client.Client, task *runnerv1.Task) *Reporter {
@@ -80,6 +83,13 @@ func (r *Reporter) ResetSteps(l int) {
 			Id: int64(i),
 		})
 	}
+}
+
+func (r *Reporter) SetStepIdMapping(stepIDs ...string) {
+	r.ResetSteps(len(stepIDs))
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	r.stepIds = stepIDs
 }
 
 func (r *Reporter) Levels() []log.Level {
@@ -131,6 +141,12 @@ func (r *Reporter) Fire(entry *log.Entry) error {
 	if v, ok := entry.Data["stepNumber"]; ok {
 		if v, ok := v.(int); ok && len(r.state.Steps) > v {
 			step = r.state.Steps[v]
+		}
+	} else if v, ok := entry.Data["stepID"]; ok {
+		if v, ok := v.([]string); ok && len(v) >= 1 {
+			if no := slices.Index(r.stepIds, v[0]); no >= 0 && len(r.state.Steps) > no {
+				step = r.state.Steps[no]
+			}
 		}
 	}
 	if step == nil {

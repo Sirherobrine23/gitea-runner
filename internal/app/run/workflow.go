@@ -17,7 +17,16 @@ import (
 
 func generateWorkflow(task *runnerv1.Task) (*model.Workflow, string, error) {
 	workflow, err := model.ReadWorkflow(bytes.NewReader(task.WorkflowPayload), model.WorkflowConfig{
-		Schema: schema.GetGiteaWorkflowSchema(),
+		// Schema: schema.GetGiteaWorkflowSchema(),
+		// Allow everything
+		Schema: &schema.Schema{
+			Definitions: map[string]schema.Definition{
+				"workflow-root": {
+					Context: []string{"github", "gitea", "env", "job", "matrix", "inputs", "vars"},
+					OneOf:   &[]string{"any"},
+				},
+			},
+		},
 	})
 	if err != nil {
 		return nil, "", err
@@ -53,6 +62,7 @@ func generateWorkflow(task *runnerv1.Task) (*model.Workflow, string, error) {
 
 	// TODO GITEA
 	workflow.Jobs[jobID].RawNeeds = rawNeeds
+	workflow.Jobs[jobID].RawRunsOn.Encode("dummy")
 
 	return workflow, jobID, nil
 }
