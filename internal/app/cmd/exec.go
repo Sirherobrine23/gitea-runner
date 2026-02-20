@@ -25,6 +25,16 @@ import (
 	"golang.org/x/term"
 )
 
+type JobLoggerFactoryWithInfoLevel struct {
+}
+
+// WithJobLogger implements [runner.JobLoggerFactory].
+func (j *JobLoggerFactoryWithInfoLevel) WithJobLogger() *log.Logger {
+	jobLogger := log.New()
+	jobLogger.SetLevel(log.InfoLevel)
+	return jobLogger
+}
+
 type executeArgs struct {
 	runList               bool
 	job                   string
@@ -449,10 +459,7 @@ func runExec(ctx context.Context, execArgs *executeArgs) func(cmd *cobra.Command
 		}
 
 		// TODO GITEA
-		// if !execArgs.debug {
-		// 	logLevel := log.InfoLevel
-		// 	config.JobLoggerLevel = &logLevel
-		// }
+		ctx = runner.WithJobLoggerFactory(ctx, &JobLoggerFactoryWithInfoLevel{})
 
 		r, err := runner.New(config)
 		if err != nil {

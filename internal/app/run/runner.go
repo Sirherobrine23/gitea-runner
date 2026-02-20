@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,13 +31,18 @@ import (
 )
 
 type JobLoggerFactory struct {
-	reporter *report.Reporter
+	reporter      *report.Reporter
+	logToTerminal bool
 }
 
 // WithJobLogger implements [runner.JobLoggerFactory].
 func (j *JobLoggerFactory) WithJobLogger() *log.Logger {
 	jobLogger := logrus.New()
-	jobLogger.SetOutput(os.Stdout)
+	if j.logToTerminal {
+		jobLogger.SetOutput(os.Stdout)
+	} else {
+		jobLogger.SetOutput(io.Discard)
+	}
 	jobLogger.AddHook(j.reporter)
 	return jobLogger
 }
@@ -283,13 +289,7 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 	reporter.Logf("workflow prepared")
 
 	// TODO GITEA
-	// // add logger recorders
-	// ctx = common.WithLoggerHook(ctx, reporter)
-	ctx = runner.WithJobLoggerFactory(ctx, &JobLoggerFactory{reporter: reporter})
-
-	// if !log.IsLevelEnabled(log.DebugLevel) {
-	// 	ctx = runner.WithJobLoggerFactory(ctx, NullLogger{})
-	// }
+	ctx = runner.WithJobLoggerFactory(ctx, &JobLoggerFactory{reporter: reporter, logToTerminal: log.IsLevelEnabled(log.DebugLevel)})
 
 	execErr := executor(ctx)
 	reporter.SetOutputs(job.Outputs)
