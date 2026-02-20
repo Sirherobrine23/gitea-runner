@@ -6,6 +6,7 @@ package run
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/actions-oss/act-cli/pkg/model"
 	"github.com/actions-oss/act-cli/pkg/runner"
 	"github.com/docker/docker/api/types/container"
+	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 
 	"gitea.com/gitea/act_runner/internal/pkg/client"
@@ -24,6 +26,18 @@ import (
 	"gitea.com/gitea/act_runner/internal/pkg/report"
 	"gitea.com/gitea/act_runner/internal/pkg/ver"
 )
+
+type JobLoggerFactory struct {
+	reporter *report.Reporter
+}
+
+// WithJobLogger implements [runner.JobLoggerFactory].
+func (j *JobLoggerFactory) WithJobLogger() *log.Logger {
+	jobLogger := logrus.New()
+	jobLogger.SetOutput(os.Stdout)
+	jobLogger.AddHook(j.reporter)
+	return jobLogger
+}
 
 // Runner runs the pipeline.
 type Runner struct {
@@ -244,6 +258,7 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 	// TODO GITEA
 	// // add logger recorders
 	// ctx = common.WithLoggerHook(ctx, reporter)
+	ctx = runner.WithJobLoggerFactory(ctx, &JobLoggerFactory{reporter: reporter})
 
 	if !log.IsLevelEnabled(log.DebugLevel) {
 		ctx = runner.WithJobLoggerFactory(ctx, NullLogger{})
