@@ -22,7 +22,7 @@ func generateWorkflow(task *runnerv1.Task) (*model.Workflow, string, error) {
 		Schema: &schema.Schema{
 			Definitions: map[string]schema.Definition{
 				"workflow-root": {
-					Context: []string{"github", "gitea", "env", "job", "matrix", "inputs", "vars"},
+					Context: []string{"github", "gitea", "env", "job", "matrix", "inputs", "vars", "runner", "steps"},
 					OneOf:   &[]string{"any"},
 				},
 			},
