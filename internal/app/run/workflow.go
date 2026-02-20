@@ -10,12 +10,15 @@ import (
 	"strings"
 
 	runnerv1 "code.gitea.io/actions-proto-go/runner/v1"
-	"github.com/nektos/act/pkg/model"
+	"github.com/actions-oss/act-cli/pkg/model"
+	"github.com/actions-oss/act-cli/pkg/schema"
 	"go.yaml.in/yaml/v4"
 )
 
 func generateWorkflow(task *runnerv1.Task) (*model.Workflow, string, error) {
-	workflow, err := model.ReadWorkflow(bytes.NewReader(task.WorkflowPayload))
+	workflow, err := model.ReadWorkflow(bytes.NewReader(task.WorkflowPayload), model.WorkflowConfig{
+		Schema: schema.GetGiteaWorkflowSchema(),
+	})
 	if err != nil {
 		return nil, "", err
 	}
@@ -48,7 +51,8 @@ func generateWorkflow(task *runnerv1.Task) (*model.Workflow, string, error) {
 		})
 	}
 
-	workflow.Jobs[jobID].RawNeeds = rawNeeds
+	// TODO GITEA
+	// workflow.Jobs[jobID].RawNeeds = rawNeeds
 
 	return workflow, jobID, nil
 }

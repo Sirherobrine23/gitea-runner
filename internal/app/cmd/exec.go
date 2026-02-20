@@ -11,15 +11,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/actions-oss/act-cli/pkg/artifactcache"
+	"github.com/actions-oss/act-cli/pkg/artifacts"
+	"github.com/actions-oss/act-cli/pkg/common"
+	"github.com/actions-oss/act-cli/pkg/model"
+	"github.com/actions-oss/act-cli/pkg/runner"
+	"github.com/actions-oss/act-cli/pkg/schema"
 	"github.com/docker/docker/api/types/container"
 	"github.com/joho/godotenv"
-	"github.com/nektos/act/pkg/artifactcache"
-	"github.com/nektos/act/pkg/artifacts"
-	"github.com/nektos/act/pkg/common"
-	"github.com/nektos/act/pkg/model"
-	"github.com/nektos/act/pkg/runner"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -313,7 +313,12 @@ func runExecList(ctx context.Context, planner model.WorkflowPlanner, execArgs *e
 
 func runExec(ctx context.Context, execArgs *executeArgs) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		planner, err := model.NewWorkflowPlanner(execArgs.WorkflowsPath(), execArgs.noWorkflowRecurse)
+		planner, err := model.NewWorkflowPlanner(execArgs.WorkflowsPath(), model.PlannerConfig{
+			Recursive: !execArgs.noWorkflowRecurse,
+			Workflow: model.WorkflowConfig{
+				Schema: schema.GetGiteaWorkflowSchema(),
+			},
+		})
 		if err != nil {
 			return err
 		}
@@ -362,10 +367,11 @@ func runExec(ctx context.Context, execArgs *executeArgs) func(cmd *cobra.Command
 			}
 		}
 
-		maxLifetime := 3 * time.Hour
-		if deadline, ok := ctx.Deadline(); ok {
-			maxLifetime = time.Until(deadline)
-		}
+		// TODO GITEA
+		// maxLifetime := 3 * time.Hour
+		// if deadline, ok := ctx.Deadline(); ok {
+		// 	maxLifetime = time.Until(deadline)
+		// }
 
 		// init a cache server
 		handler, err := artifactcache.StartHandler("", "", 0, log.StandardLogger().WithField("module", "cache_request"))
@@ -422,14 +428,16 @@ func runExec(ctx context.Context, execArgs *executeArgs) func(cmd *cobra.Command
 			NoSkipCheckout:        execArgs.noSkipCheckout,
 			// PresetGitHubContext:   preset,
 			// EventJSON:             string(eventJSON),
-			ContainerNamePrefix:   fmt.Sprintf("GITEA-ACTIONS-TASK-%s", eventName),
-			ContainerMaxLifetime:  maxLifetime,
-			ContainerNetworkMode:  container.NetworkMode(execArgs.network),
-			DefaultActionInstance: execArgs.defaultActionsURL,
-			PlatformPicker: func(_ []string) string {
-				return execArgs.image
-			},
-			ValidVolumes: []string{"**"}, // All volumes are allowed for `exec` command
+			// TODO GITEA
+			// ContainerNamePrefix:   fmt.Sprintf("GITEA-ACTIONS-TASK-%s", eventName),
+			// ContainerMaxLifetime:  maxLifetime,
+			ContainerNetworkMode: container.NetworkMode(execArgs.network),
+			// TODO GITEA
+			// DefaultActionInstance: execArgs.defaultActionsURL,
+			// PlatformPicker: func(_ []string) string {
+			// 	return execArgs.image
+			// },
+			// ValidVolumes: []string{"**"}, // All volumes are allowed for `exec` command
 		}
 
 		config.Env["ACT_EXEC"] = "true"
@@ -440,10 +448,11 @@ func runExec(ctx context.Context, execArgs *executeArgs) func(cmd *cobra.Command
 			config.Token = t
 		}
 
-		if !execArgs.debug {
-			logLevel := log.InfoLevel
-			config.JobLoggerLevel = &logLevel
-		}
+		// TODO GITEA
+		// if !execArgs.debug {
+		// 	logLevel := log.InfoLevel
+		// 	config.JobLoggerLevel = &logLevel
+		// }
 
 		r, err := runner.New(config)
 		if err != nil {

@@ -5,20 +5,17 @@ package run
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	runnerv1 "code.gitea.io/actions-proto-go/runner/v1"
 	"connectrpc.com/connect"
+	"github.com/actions-oss/act-cli/pkg/artifactcache"
+	"github.com/actions-oss/act-cli/pkg/model"
+	"github.com/actions-oss/act-cli/pkg/runner"
 	"github.com/docker/docker/api/types/container"
-	"github.com/nektos/act/pkg/artifactcache"
-	"github.com/nektos/act/pkg/common"
-	"github.com/nektos/act/pkg/model"
-	"github.com/nektos/act/pkg/runner"
 	log "github.com/sirupsen/logrus"
 
 	"gitea.com/gitea/act_runner/internal/pkg/client"
@@ -138,10 +135,13 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		return err
 	}
 
-	plan, err := model.CombineWorkflowPlanner(workflow).PlanJob(jobID)
-	if err != nil {
-		return err
-	}
+	plan := &model.Plan{}
+
+	// TODO GITEA
+	// plan, err := model.CombineWorkflowPlanner(workflow).PlanJob(jobID)
+	// if err != nil {
+	// 	return err
+	// }
 	job := workflow.GetJob(jobID)
 	reporter.ResetSteps(len(job.Steps))
 
@@ -187,15 +187,16 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 	}
 	r.envs["ACTIONS_RUNTIME_TOKEN"] = giteaRuntimeToken
 
-	eventJSON, err := json.Marshal(preset.Event)
-	if err != nil {
-		return err
-	}
+	// TODO GITEA
+	// eventJSON, err := json.Marshal(preset.Event)
+	// if err != nil {
+	// 	return err
+	// }
 
-	maxLifetime := 3 * time.Hour
-	if deadline, ok := ctx.Deadline(); ok {
-		maxLifetime = time.Until(deadline)
-	}
+	// maxLifetime := 3 * time.Hour
+	// if deadline, ok := ctx.Deadline(); ok {
+	// 	maxLifetime = time.Until(deadline)
+	// }
 
 	runnerConfig := &runner.Config{
 		// On Linux, Workdir will be like "/<parent_directory>/<owner>/<repo>"
@@ -204,29 +205,32 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		BindWorkdir:    false,
 		ActionCacheDir: filepath.FromSlash(r.cfg.Host.WorkdirParent),
 
-		ReuseContainers:       false,
-		ForcePull:             r.cfg.Container.ForcePull,
-		ForceRebuild:          r.cfg.Container.ForceRebuild,
-		LogOutput:             true,
-		JSONLogger:            false,
-		Env:                   r.envs,
-		Secrets:               task.Secrets,
-		GitHubInstance:        strings.TrimSuffix(r.client.Address(), "/"),
-		AutoRemove:            true,
-		NoSkipCheckout:        true,
-		PresetGitHubContext:   preset,
-		EventJSON:             string(eventJSON),
-		ContainerNamePrefix:   fmt.Sprintf("GITEA-ACTIONS-TASK-%d", task.Id),
-		ContainerMaxLifetime:  maxLifetime,
+		ReuseContainers: false,
+		ForcePull:       r.cfg.Container.ForcePull,
+		ForceRebuild:    r.cfg.Container.ForceRebuild,
+		LogOutput:       true,
+		JSONLogger:      false,
+		Env:             r.envs,
+		Secrets:         task.Secrets,
+		GitHubInstance:  strings.TrimSuffix(r.client.Address(), "/"),
+		AutoRemove:      true,
+		NoSkipCheckout:  true,
+		// TODO GITEA
+		// PresetGitHubContext:   preset,
+		// EventJSON:             string(eventJSON),
+		// ContainerNamePrefix:   fmt.Sprintf("GITEA-ACTIONS-TASK-%d", task.Id),
+		// ContainerMaxLifetime:  maxLifetime,
 		ContainerNetworkMode:  container.NetworkMode(r.cfg.Container.Network),
 		ContainerOptions:      r.cfg.Container.Options,
 		ContainerDaemonSocket: r.cfg.Container.DockerHost,
 		Privileged:            r.cfg.Container.Privileged,
-		DefaultActionInstance: r.getDefaultActionsURL(ctx, task),
-		PlatformPicker:        r.labels.PickPlatform,
-		Vars:                  task.Vars,
-		ValidVolumes:          r.cfg.Container.ValidVolumes,
-		InsecureSkipTLS:       r.cfg.Runner.Insecure,
+		// TODO GITEA
+		// DefaultActionInstance: r.getDefaultActionsURL(ctx, task),
+		// PlatformPicker:        r.labels.PickPlatform,
+		Vars: task.Vars,
+		// TODO GITEA
+		// ValidVolumes:          r.cfg.Container.ValidVolumes,
+		// InsecureSkipTLS:       r.cfg.Runner.Insecure,
 	}
 
 	rr, err := runner.New(runnerConfig)
@@ -237,8 +241,9 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 
 	reporter.Logf("workflow prepared")
 
-	// add logger recorders
-	ctx = common.WithLoggerHook(ctx, reporter)
+	// TODO GITEA
+	// // add logger recorders
+	// ctx = common.WithLoggerHook(ctx, reporter)
 
 	if !log.IsLevelEnabled(log.DebugLevel) {
 		ctx = runner.WithJobLoggerFactory(ctx, NullLogger{})

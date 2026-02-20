@@ -11,7 +11,7 @@ import (
 
 	"gitea.com/gitea/act_runner/internal/pkg/config"
 
-	"github.com/nektos/act/pkg/artifactcache"
+	"github.com/actions-oss/act-cli/pkg/artifactcache"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
