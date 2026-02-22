@@ -7,8 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -28,23 +26,6 @@ import (
 	"gitea.com/gitea/act_runner/internal/pkg/report"
 	"gitea.com/gitea/act_runner/internal/pkg/ver"
 )
-
-type JobLoggerFactory struct {
-	reporter      *report.Reporter
-	logToTerminal bool
-}
-
-// WithJobLogger implements [runner.JobLoggerFactory].
-func (j *JobLoggerFactory) WithJobLogger() *log.Logger {
-	jobLogger := log.New()
-	if j.logToTerminal {
-		jobLogger.SetOutput(os.Stdout)
-	} else {
-		jobLogger.SetOutput(io.Discard)
-	}
-	jobLogger.AddHook(j.reporter)
-	return jobLogger
-}
 
 // Runner runs the pipeline.
 type Runner struct {
@@ -288,7 +269,7 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 	reporter.Logf("workflow prepared")
 
 	// TODO GITEA
-	ctx = runner.WithJobLoggerFactory(ctx, &JobLoggerFactory{reporter: reporter, logToTerminal: log.IsLevelEnabled(log.DebugLevel)})
+	ctx = runner.WithJobLoggerFactory(ctx, &JobLoggerWithReporter{Reporter: reporter, LogToTerminal: log.IsLevelEnabled(log.DebugLevel)})
 
 	execErr := executor(ctx)
 	reporter.SetOutputs(job.Outputs)

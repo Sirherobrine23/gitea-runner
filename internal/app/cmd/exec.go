@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"gitea.com/gitea/act_runner/internal/app/run"
 	"github.com/actions-oss/act-cli/pkg/artifactcache"
 	"github.com/actions-oss/act-cli/pkg/artifacts"
 	"github.com/actions-oss/act-cli/pkg/common"
@@ -24,15 +25,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
-
-type JobLoggerFactoryWithInfoLevel struct{}
-
-// WithJobLogger implements [runner.JobLoggerFactory].
-func (j *JobLoggerFactoryWithInfoLevel) WithJobLogger() *log.Logger {
-	jobLogger := log.New()
-	jobLogger.SetLevel(log.InfoLevel)
-	return jobLogger
-}
 
 type executeArgs struct {
 	runList               bool
@@ -458,7 +450,7 @@ func runExec(ctx context.Context, execArgs *executeArgs) func(cmd *cobra.Command
 		}
 
 		// TODO GITEA
-		ctx = runner.WithJobLoggerFactory(ctx, &JobLoggerFactoryWithInfoLevel{})
+		ctx = runner.WithJobLoggerFactory(ctx, &run.JobLoggerFactoryWithInfoLevel{})
 
 		r, err := runner.New(config)
 		if err != nil {
