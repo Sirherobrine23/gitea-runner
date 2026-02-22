@@ -20,7 +20,6 @@ import (
 	"github.com/actions-oss/act-cli/pkg/runner"
 	"github.com/actions-oss/act-cli/pkg/schema"
 	"github.com/docker/docker/api/types/container"
-	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 
 	"gitea.com/gitea/act_runner/internal/pkg/client"
@@ -37,7 +36,7 @@ type JobLoggerFactory struct {
 
 // WithJobLogger implements [runner.JobLoggerFactory].
 func (j *JobLoggerFactory) WithJobLogger() *log.Logger {
-	jobLogger := logrus.New()
+	jobLogger := log.New()
 	if j.logToTerminal {
 		jobLogger.SetOutput(os.Stdout)
 	} else {
@@ -269,7 +268,7 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		// InsecureSkipTLS:       r.cfg.Runner.Insecure,
 
 		GitHubServerURL:    strings.TrimSuffix(r.client.Address(), "/"),
-		GitHubAPIServerURL: strings.TrimSuffix(r.client.Address(), "/api/v1"),
+		GitHubAPIServerURL: strings.TrimSuffix(r.client.Address(), "/") + "/api/v1",
 		// Invalid but ok
 		GitHubGraphQlAPIServerURL: strings.TrimSuffix(r.client.Address(), "/api/graphql"),
 		MainContextNames:          []string{"gitea", "github"},
