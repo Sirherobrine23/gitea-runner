@@ -5,6 +5,7 @@ package report
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -38,6 +39,7 @@ type Reporter struct {
 	state   *runnerv1.TaskState
 	stateMu sync.RWMutex
 	outputs sync.Map
+	daemon  chan struct{}
 
 	debugOutputEnabled  bool
 	stopCommandEndToken string
@@ -66,6 +68,7 @@ func NewReporter(ctx context.Context, cancel context.CancelFunc, client client.C
 		state: &runnerv1.TaskState{
 			Id: task.Id,
 		},
+		daemon: make(chan struct{}),
 	}
 
 	if task.Secrets["ACTIONS_STEP_DEBUG"] == "true" {
@@ -103,6 +106,18 @@ func appendIfNotNil[T any](s []*T, v *T) []*T {
 	return s
 }
 
+// isJobStepEntry is used to not report composite step results incorrectly as step result
+// returns true if the logentry is on job level
+// returns false for composite action step messages
+func isJobStepEntry(entry *log.Entry) bool {
+	if v, ok := entry.Data["stepID"]; ok {
+		if v, ok := v.([]string); ok && len(v) > 1 {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *Reporter) Fire(entry *log.Entry) error {
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
@@ -119,6 +134,7 @@ func (r *Reporter) Fire(entry *log.Entry) error {
 	if stage != "Main" {
 		if v, ok := entry.Data["jobResult"]; ok {
 			if jobResult, ok := r.parseResult(v); ok {
+				// We need to ensure log upload before this upload
 				r.state.Result = jobResult
 				r.state.StoppedAt = timestamppb.New(timestamp)
 				for _, s := range r.state.Steps {
@@ -178,7 +194,7 @@ func (r *Reporter) Fire(entry *log.Entry) error {
 	} else if !r.duringSteps() {
 		r.logRows = appendIfNotNil(r.logRows, r.parseLogRow(entry))
 	}
-	if v, ok := entry.Data["stepResult"]; ok {
+	if v, ok := entry.Data["stepResult"]; ok && isJobStepEntry(entry) {
 		if stepResult, ok := r.parseResult(v); ok {
 			if step.LogLength == 0 {
 				step.LogIndex = int64(r.logOffset + len(r.logRows))
@@ -192,15 +208,17 @@ func (r *Reporter) Fire(entry *log.Entry) error {
 }
 
 func (r *Reporter) RunDaemon() {
-	if r.closed {
-		return
-	}
-	if r.ctx.Err() != nil {
+	r.stateMu.RLock()
+	closed := r.closed
+	r.stateMu.RUnlock()
+	if closed || r.ctx.Err() != nil {
+		// Acknowledge close
+		close(r.daemon)
 		return
 	}
 
 	_ = r.ReportLog(false)
-	_ = r.ReportState()
+	_ = r.ReportState(false)
 
 	time.AfterFunc(time.Second, r.RunDaemon)
 }
@@ -242,9 +260,8 @@ func (r *Reporter) SetOutputs(outputs map[string]string) {
 }
 
 func (r *Reporter) Close(lastWords string) error {
-	r.closed = true
-
 	r.stateMu.Lock()
+	r.closed = true
 	if r.state.Result == runnerv1.Result_RESULT_UNSPECIFIED {
 		if lastWords == "" {
 			lastWords = "Early termination"
@@ -267,13 +284,23 @@ func (r *Reporter) Close(lastWords string) error {
 		})
 	}
 	r.stateMu.Unlock()
+	// Wait for Acknowledge
+	select {
+	case <-r.daemon:
+	case <-time.After(60 * time.Second):
+		close(r.daemon)
+		log.Error("No Response from RunDaemon for 60s, continue best effort")
+	}
 
-	return retry.Do(func() error {
-		if err := r.ReportLog(true); err != nil {
-			return err
-		}
-		return r.ReportState()
-	}, retry.Context(r.ctx))
+	// Report the job outcome even when all log upload retry attempts have been exhausted
+	return errors.Join(
+		retry.Do(func() error {
+			return r.ReportLog(true)
+		}, retry.Context(r.ctx)),
+		retry.Do(func() error {
+			return r.ReportState(true)
+		}, retry.Context(r.ctx)),
+	)
 }
 
 func (r *Reporter) ReportLog(noMore bool) error {
@@ -301,23 +328,31 @@ func (r *Reporter) ReportLog(noMore bool) error {
 
 	r.stateMu.Lock()
 	r.logRows = r.logRows[ack-r.logOffset:]
+	submitted := r.logOffset + len(rows)
 	r.logOffset = ack
 	r.stateMu.Unlock()
 
-	if noMore && ack < r.logOffset+len(rows) {
+	if noMore && ack < submitted {
 		return fmt.Errorf("not all logs are submitted")
 	}
 
 	return nil
 }
 
-func (r *Reporter) ReportState() error {
+// ReportState only reports the job result if reportResult is true
+// RunDaemon never reports results even if result is set
+func (r *Reporter) ReportState(reportResult bool) error {
 	r.clientM.Lock()
 	defer r.clientM.Unlock()
 
 	r.stateMu.RLock()
 	state := proto.Clone(r.state).(*runnerv1.TaskState)
 	r.stateMu.RUnlock()
+
+	// Only report result from Close to reliable sent logs
+	if !reportResult {
+		state.Result = runnerv1.Result_RESULT_UNSPECIFIED
+	}
 
 	outputs := make(map[string]string)
 	r.outputs.Range(func(k, v interface{}) bool {

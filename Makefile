@@ -125,7 +125,7 @@ tidy-check: tidy
 	fi
 
 test: fmt-check security-check
-	@$(GO) test -v -cover -coverprofile coverage.txt ./... && echo "\n==>\033[32m Ok\033[m\n" || exit 1
+	@$(GO) test -race -v -cover -coverprofile coverage.txt ./... && echo "\n==>\033[32m Ok\033[m\n" || exit 1
 
 .PHONY: vet
 vet:
