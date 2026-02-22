@@ -81,7 +81,7 @@ func NewReporter(ctx context.Context, cancel context.CancelFunc, client client.C
 func (r *Reporter) ResetSteps(l int) {
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
-	for i := 0; i < l; i++ {
+	for i := range l {
 		r.state.Steps = append(r.state.Steps, &runnerv1.StepState{
 			Id: int64(i),
 		})
@@ -223,14 +223,14 @@ func (r *Reporter) RunDaemon() {
 	time.AfterFunc(time.Second, r.RunDaemon)
 }
 
-func (r *Reporter) Logf(format string, a ...interface{}) {
+func (r *Reporter) Logf(format string, a ...any) {
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
 
 	r.logf(format, a...)
 }
 
-func (r *Reporter) logf(format string, a ...interface{}) {
+func (r *Reporter) logf(format string, a ...any) {
 	if !r.duringSteps() {
 		r.logRows = append(r.logRows, &runnerv1.LogRow{
 			Time:    timestamppb.Now(),
@@ -323,7 +323,7 @@ func (r *Reporter) ReportLog(noMore bool) error {
 
 	ack := int(resp.Msg.AckIndex)
 	if ack < r.logOffset {
-		return fmt.Errorf("submitted logs are lost")
+		return errors.New("submitted logs are lost")
 	}
 
 	r.stateMu.Lock()
@@ -333,7 +333,7 @@ func (r *Reporter) ReportLog(noMore bool) error {
 	r.stateMu.Unlock()
 
 	if noMore && ack < submitted {
-		return fmt.Errorf("not all logs are submitted")
+		return errors.New("not all logs are submitted")
 	}
 
 	return nil
@@ -355,7 +355,7 @@ func (r *Reporter) ReportState(reportResult bool) error {
 	}
 
 	outputs := make(map[string]string)
-	r.outputs.Range(func(k, v interface{}) bool {
+	r.outputs.Range(func(k, v any) bool {
 		if val, ok := v.(string); ok {
 			outputs[k.(string)] = val
 		}
@@ -379,7 +379,7 @@ func (r *Reporter) ReportState(reportResult bool) error {
 	}
 
 	var noSent []string
-	r.outputs.Range(func(k, v interface{}) bool {
+	r.outputs.Range(func(k, v any) bool {
 		if _, ok := v.(string); ok {
 			noSent = append(noSent, k.(string))
 		}
@@ -410,7 +410,7 @@ var stringToResult = map[string]runnerv1.Result{
 	"cancelled": runnerv1.Result_RESULT_CANCELLED,
 }
 
-func (r *Reporter) parseResult(result interface{}) (runnerv1.Result, bool) {
+func (r *Reporter) parseResult(result any) (runnerv1.Result, bool) {
 	str := ""
 	if v, ok := result.(string); ok { // for jobResult
 		str = v
@@ -424,7 +424,7 @@ func (r *Reporter) parseResult(result interface{}) (runnerv1.Result, bool) {
 
 var cmdRegex = regexp.MustCompile(`^::([^ :]+)( .*)?::(.*)$`)
 
-func (r *Reporter) handleCommand(originalContent, command, parameters, value string) *string {
+func (r *Reporter) handleCommand(originalContent, command, value string) *string {
 	if r.stopCommandEndToken != "" && command != r.stopCommandEndToken {
 		return &originalContent
 	}
@@ -470,7 +470,7 @@ func (r *Reporter) parseLogRow(entry *log.Entry) *runnerv1.LogRow {
 
 	matches := cmdRegex.FindStringSubmatch(content)
 	if matches != nil {
-		if output := r.handleCommand(content, matches[1], matches[2], matches[3]); output != nil {
+		if output := r.handleCommand(content, matches[1], matches[3]); output != nil {
 			content = *output
 		} else {
 			return nil

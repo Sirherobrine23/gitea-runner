@@ -307,7 +307,7 @@ func Test_yamlV4NodeRoundTrip(t *testing.T) {
 	t.Run("unmarshal and re-marshal workflow", func(t *testing.T) {
 		input := []byte("name: test\non: push\njobs:\n    build:\n        runs-on: ubuntu-latest\n        steps:\n            - run: echo hello\n")
 
-		var wf map[string]interface{}
+		var wf map[string]any
 		err := yaml.Unmarshal(input, &wf)
 		require.NoError(t, err)
 		assert.Equal(t, wf["name"], "test")
@@ -315,7 +315,7 @@ func Test_yamlV4NodeRoundTrip(t *testing.T) {
 		out, err := yaml.Marshal(wf)
 		require.NoError(t, err)
 
-		var wf2 map[string]interface{}
+		var wf2 map[string]any
 		err = yaml.Unmarshal(out, &wf2)
 		require.NoError(t, err)
 		assert.Equal(t, wf2["name"], "test")

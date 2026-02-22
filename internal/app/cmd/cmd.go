@@ -72,7 +72,7 @@ func Execute(ctx context.Context) {
 		Use:   "cache-server",
 		Short: "Start a cache server for the cache action",
 		Args:  cobra.MaximumNArgs(0),
-		RunE:  runCacheServer(ctx, &configFile, &cacheArgs),
+		RunE:  runCacheServer(&configFile, &cacheArgs),
 	}
 	cacheCmd.Flags().StringVarP(&cacheArgs.Dir, "dir", "d", "", "Cache directory")
 	cacheCmd.Flags().StringVarP(&cacheArgs.Host, "host", "s", "", "Host of the cache server")

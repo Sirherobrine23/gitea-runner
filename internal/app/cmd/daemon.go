@@ -262,5 +262,5 @@ func getDockerSocketPath(configDockerHost string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("daemon Docker Engine socket not found and docker_host config was invalid")
+	return "", errors.New("daemon Docker Engine socket not found and docker_host config was invalid")
 }

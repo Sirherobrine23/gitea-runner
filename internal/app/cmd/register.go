@@ -6,6 +6,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -107,10 +108,10 @@ type registerInputs struct {
 
 func (r *registerInputs) validate() error {
 	if r.InstanceAddr == "" {
-		return fmt.Errorf("instance address is empty")
+		return errors.New("instance address is empty")
 	}
 	if r.Token == "" {
-		return fmt.Errorf("token is empty")
+		return errors.New("token is empty")
 	}
 	if len(r.Labels) > 0 {
 		return validateLabels(r.Labels)

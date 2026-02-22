@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"time"
@@ -96,9 +97,7 @@ func LoadDefault(file string) (*Config, error) {
 			if cfg.Runner.Envs == nil {
 				cfg.Runner.Envs = map[string]string{}
 			}
-			for k, v := range envs {
-				cfg.Runner.Envs[k] = v
-			}
+			maps.Copy(cfg.Runner.Envs, envs)
 		}
 	}
 

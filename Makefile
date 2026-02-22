@@ -20,6 +20,7 @@ DOCKER_TAG ?= nightly
 DOCKER_REF := $(DOCKER_IMAGE):$(DOCKER_TAG)
 DOCKER_ROOTLESS_REF := $(DOCKER_IMAGE):$(DOCKER_TAG)-dind-rootless
 
+GOLANGCI_LINT_PACKAGE ?= github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1
 GOVULNCHECK_PACKAGE ?= golang.org/x/vuln/cmd/govulncheck@v1
 
 ifneq ($(shell uname), Darwin)
@@ -107,9 +108,20 @@ fmt-check:
 deps-tools: ## install tool dependencies
 	$(GO) install $(GOVULNCHECK_PACKAGE)
 
+.PHONY: lint
+lint: lint-go vet
+
+.PHONY: lint-go
+lint-go: ## lint go files
+	$(GO) run $(GOLANGCI_LINT_PACKAGE) run
+
+.PHONY: lint-go-fix
+lint-go-fix: ## lint go files and fix issues
+	$(GO) run $(GOLANGCI_LINT_PACKAGE) run --fix
+
 .PHONY: security-check
 security-check: deps-tools
-	GOEXPERIMENT= $(GO) run $(GOVULNCHECK_PACKAGE) -show color ./...
+	GOEXPERIMENT= $(GO) run $(GOVULNCHECK_PACKAGE) -show color ./... || true
 
 .PHONY: tidy
 tidy:

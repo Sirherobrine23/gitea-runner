@@ -102,7 +102,7 @@ func (p *Poller) Shutdown(ctx context.Context) error {
 		p.shutdownJobs()
 
 		// wait for running jobs to report their status to Gitea
-		_, _ = <-p.done
+		<-p.done
 
 		return ctx.Err()
 	}

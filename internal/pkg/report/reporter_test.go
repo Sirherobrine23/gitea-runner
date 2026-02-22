@@ -5,7 +5,7 @@ package report
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -173,30 +173,30 @@ func TestReporter_Fire(t *testing.T) {
 			return connect_go.NewResponse(&runnerv1.UpdateTaskResponse{}), nil
 		})
 		ctx, cancel := context.WithCancel(context.Background())
-		taskCtx, err := structpb.NewStruct(map[string]interface{}{})
+		taskCtx, err := structpb.NewStruct(map[string]any{})
 		require.NoError(t, err)
 		reporter := NewReporter(ctx, cancel, client, &runnerv1.Task{
 			Context: taskCtx,
 		})
 		reporter.RunDaemon()
 		defer func() {
-			assert.NoError(t, reporter.Close(""))
+			require.NoError(t, reporter.Close(""))
 		}()
 		reporter.ResetSteps(5)
 
-		dataStep0 := map[string]interface{}{
+		dataStep0 := map[string]any{
 			"stage":      "Main",
 			"stepNumber": 0,
 			"raw_output": true,
 		}
 
-		assert.NoError(t, reporter.Fire(&log.Entry{Message: "regular log line", Data: dataStep0}))
-		assert.NoError(t, reporter.Fire(&log.Entry{Message: "::debug::debug log line", Data: dataStep0}))
-		assert.NoError(t, reporter.Fire(&log.Entry{Message: "regular log line", Data: dataStep0}))
-		assert.NoError(t, reporter.Fire(&log.Entry{Message: "::debug::debug log line", Data: dataStep0}))
-		assert.NoError(t, reporter.Fire(&log.Entry{Message: "::debug::debug log line", Data: dataStep0}))
-		assert.NoError(t, reporter.Fire(&log.Entry{Message: "regular log line", Data: dataStep0}))
-		assert.NoError(t, reporter.Fire(&log.Entry{Message: "composite step result", Data: map[string]interface{}{
+		require.NoError(t, reporter.Fire(&log.Entry{Message: "regular log line", Data: dataStep0}))
+		require.NoError(t, reporter.Fire(&log.Entry{Message: "::debug::debug log line", Data: dataStep0}))
+		require.NoError(t, reporter.Fire(&log.Entry{Message: "regular log line", Data: dataStep0}))
+		require.NoError(t, reporter.Fire(&log.Entry{Message: "::debug::debug log line", Data: dataStep0}))
+		require.NoError(t, reporter.Fire(&log.Entry{Message: "::debug::debug log line", Data: dataStep0}))
+		require.NoError(t, reporter.Fire(&log.Entry{Message: "regular log line", Data: dataStep0}))
+		require.NoError(t, reporter.Fire(&log.Entry{Message: "composite step result", Data: map[string]any{
 			"stage":      "Main",
 			"stepID":     []string{"0", "0"},
 			"stepNumber": 0,
@@ -204,7 +204,7 @@ func TestReporter_Fire(t *testing.T) {
 			"stepResult": "failure",
 		}}))
 		assert.Equal(t, runnerv1.Result_RESULT_UNSPECIFIED, reporter.state.Steps[0].Result)
-		assert.NoError(t, reporter.Fire(&log.Entry{Message: "step result", Data: map[string]interface{}{
+		require.NoError(t, reporter.Fire(&log.Entry{Message: "step result", Data: map[string]any{
 			"stage":      "Main",
 			"stepNumber": 0,
 			"raw_output": true,
@@ -231,7 +231,7 @@ func TestReporter_EphemeralRunnerDeletion(t *testing.T) {
 	client.On("UpdateLog", mock.Anything, mock.Anything).Return(
 		func(_ context.Context, req *connect_go.Request[runnerv1.UpdateLogRequest]) (*connect_go.Response[runnerv1.UpdateLogResponse], error) {
 			if runnerDeleted {
-				return nil, fmt.Errorf("runner has been deleted")
+				return nil, errors.New("runner has been deleted")
 			}
 			return connect_go.NewResponse(&runnerv1.UpdateLogResponse{
 				AckIndex: req.Msg.Index + int64(len(req.Msg.Rows)),
@@ -250,19 +250,19 @@ func TestReporter_EphemeralRunnerDeletion(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	taskCtx, err := structpb.NewStruct(map[string]interface{}{})
+	taskCtx, err := structpb.NewStruct(map[string]any{})
 	require.NoError(t, err)
 	reporter := NewReporter(ctx, cancel, client, &runnerv1.Task{Context: taskCtx})
 	reporter.ResetSteps(1)
 
 	// Fire a log entry to create pending data
-	assert.NoError(t, reporter.Fire(&log.Entry{
+	require.NoError(t, reporter.Fire(&log.Entry{
 		Message: "build output",
 		Data:    log.Fields{"stage": "Main", "stepNumber": 0, "raw_output": true},
 	}))
 
 	// Step 1: RunDaemon calls ReportLog(false) — runner is still alive
-	assert.NoError(t, reporter.ReportLog(false))
+	require.NoError(t, reporter.ReportLog(false))
 
 	// Step 2: Close() updates state — sets Result=FAILURE and marks steps cancelled.
 	// In the real race, this happens while RunDaemon is between ReportLog and ReportState.
@@ -283,18 +283,18 @@ func TestReporter_EphemeralRunnerDeletion(t *testing.T) {
 
 	// Step 3: RunDaemon's ReportState() — with the fix, this returns early
 	// because closed=true, preventing the server from deleting the runner.
-	assert.NoError(t, reporter.ReportState(false))
+	require.NoError(t, reporter.ReportState(false))
 	assert.False(t, runnerDeleted, "runner must not be deleted by RunDaemon's ReportState")
 
 	// Step 4: Close's final log upload succeeds because the runner is still alive.
 	// Flush pending rows first, then send the noMore signal (matching Close's retry behavior).
-	assert.NoError(t, reporter.ReportLog(false))
+	require.NoError(t, reporter.ReportLog(false))
 	// Acknowledge Close as done in daemon
 	close(reporter.daemon)
 	err = reporter.ReportLog(true)
-	assert.NoError(t, err, "final log upload must not fail: runner should not be deleted before Close finishes sending logs")
+	require.NoError(t, err, "final log upload must not fail: runner should not be deleted before Close finishes sending logs")
 	err = reporter.ReportState(true)
-	assert.NoError(t, err, "final state update should work: runner should not be deleted before Close finishes sending logs")
+	require.NoError(t, err, "final state update should work: runner should not be deleted before Close finishes sending logs")
 }
 
 func TestReporter_RunDaemonClose_Race(t *testing.T) {
@@ -313,7 +313,7 @@ func TestReporter_RunDaemonClose_Race(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	taskCtx, err := structpb.NewStruct(map[string]interface{}{})
+	taskCtx, err := structpb.NewStruct(map[string]any{})
 	require.NoError(t, err)
 	reporter := NewReporter(ctx, cancel, client, &runnerv1.Task{
 		Context: taskCtx,
@@ -323,14 +323,12 @@ func TestReporter_RunDaemonClose_Race(t *testing.T) {
 	// Start the daemon loop in a separate goroutine.
 	// RunDaemon reads r.closed and reschedules itself via time.AfterFunc.
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		reporter.RunDaemon()
-	}()
+	})
 
 	// Close concurrently — this races with RunDaemon on r.closed.
-	assert.NoError(t, reporter.Close(""))
+	require.NoError(t, reporter.Close(""))
 
 	// Cancel context so pending AfterFunc callbacks exit quickly.
 	cancel()
