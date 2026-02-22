@@ -25,8 +25,7 @@ import (
 	"golang.org/x/term"
 )
 
-type JobLoggerFactoryWithInfoLevel struct {
-}
+type JobLoggerFactoryWithInfoLevel struct{}
 
 // WithJobLogger implements [runner.JobLoggerFactory].
 func (j *JobLoggerFactoryWithInfoLevel) WithJobLogger() *log.Logger {
