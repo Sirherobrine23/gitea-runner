@@ -111,6 +111,19 @@ deps-tools: ## install tool dependencies
 security-check: deps-tools
 	GOEXPERIMENT= $(GO) run $(GOVULNCHECK_PACKAGE) -show color ./...
 
+.PHONY: tidy
+tidy:
+	$(GO) mod tidy
+
+.PHONY: tidy-check
+tidy-check: tidy
+	@diff=$$(git diff -- go.mod go.sum); \
+	if [ -n "$$diff" ]; then \
+		echo "Please run 'make tidy' and commit the result:"; \
+		echo "$${diff}"; \
+		exit 1; \
+	fi
+
 test: fmt-check security-check
 	@$(GO) test -v -cover -coverprofile coverage.txt ./... && echo "\n==>\033[32m Ok\033[m\n" || exit 1
 
