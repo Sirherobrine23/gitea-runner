@@ -35,6 +35,7 @@ func newJobExecutor(info jobInfo, sf stepFactory, rc *RunContext) common.Executo
 	steps := make([]common.Executor, 0)
 	preSteps := make([]common.Executor, 0)
 	var postExecutor common.Executor
+	var startErr error
 
 	steps = append(steps, func(ctx context.Context) error {
 		logger := common.Logger(ctx)
@@ -165,7 +166,12 @@ func newJobExecutor(info jobInfo, sf stepFactory, rc *RunContext) common.Executo
 	pipeline = append(pipeline, preSteps...)
 	pipeline = append(pipeline, steps...)
 
-	return common.NewPipelineExecutor(info.startContainer(), common.NewPipelineExecutor(pipeline...).
+	startContainer := func(ctx context.Context) error {
+		startErr = info.startContainer()(ctx)
+		return startErr
+	}
+
+	return common.NewPipelineExecutor(startContainer, common.NewPipelineExecutor(pipeline...).
 		Finally(func(ctx context.Context) error {
 			var cancel context.CancelFunc
 			if ctx.Err() == context.Canceled {
@@ -176,8 +182,23 @@ func newJobExecutor(info jobInfo, sf stepFactory, rc *RunContext) common.Executo
 			}
 			return postExecutor(ctx)
 		}).
-		Finally(info.interpolateOutputs()).
-		Finally(info.closeContainer()))
+		Finally(info.interpolateOutputs())).
+		Finally(func(ctx context.Context) error {
+			if startErr == nil {
+				return nil
+			}
+
+			cleanupCtx, cancel := context.WithTimeout(common.WithLogger(context.Background(), common.Logger(ctx)), time.Minute)
+			defer cancel()
+
+			logger := common.Logger(cleanupCtx)
+			logger.Infof("Cleaning up container for failed startup of job %s", rc.JobName)
+			if err := info.stopContainer()(cleanupCtx); err != nil {
+				logger.Errorf("Error while cleaning up failed job startup: %v", err)
+			}
+			return nil
+		}).
+		Finally(info.closeContainer())
 }
 
 func setJobResult(ctx context.Context, info jobInfo, rc *RunContext, success bool) {

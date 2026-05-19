@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestJobExecutor(t *testing.T) {
@@ -340,4 +341,65 @@ func TestNewJobExecutor(t *testing.T) {
 			fmt.Println("::endgroup::") //nolint:forbidigo // pre-existing issue from nektos/act
 		})
 	}
+}
+
+func TestNewJobExecutorCleansUpAfterStartContainerFailure(t *testing.T) {
+	ctx := common.WithJobErrorContainer(context.Background())
+	jim := &jobInfoMock{}
+	sfm := &stepFactoryMock{}
+	rc := &RunContext{
+		JobName:      "test",
+		JobContainer: &jobContainerMock{},
+		Run: &model.Run{
+			JobID: "test",
+			Workflow: &model.Workflow{
+				Jobs: map[string]*model.Job{
+					"test": {},
+				},
+			},
+		},
+		Config: &Config{},
+	}
+	rc.ExprEval = rc.NewExpressionEvaluator(ctx)
+
+	executorOrder := make([]string, 0)
+	startErr := errors.New("failed to start container")
+	stepModel := &model.Step{ID: "1"}
+	sm := &stepMock{}
+
+	jim.On("steps").Return([]*model.Step{stepModel})
+	jim.On("startContainer").Return(func(ctx context.Context) error {
+		executorOrder = append(executorOrder, "startContainer")
+		return startErr
+	})
+	jim.On("stopContainer").Return(func(ctx context.Context) error {
+		executorOrder = append(executorOrder, "stopContainer")
+		return nil
+	})
+	jim.On("closeContainer").Return(func(ctx context.Context) error {
+		executorOrder = append(executorOrder, "closeContainer")
+		return nil
+	})
+	jim.On("interpolateOutputs").Return(func(ctx context.Context) error {
+		return nil
+	})
+	sfm.On("newStep", stepModel, rc).Return(sm, nil)
+	sm.On("pre").Return(func(ctx context.Context) error {
+		return nil
+	})
+	sm.On("main").Return(func(ctx context.Context) error {
+		return nil
+	})
+	sm.On("post").Return(func(ctx context.Context) error {
+		return nil
+	})
+
+	executor := newJobExecutor(jim, sfm, rc)
+	err := executor(ctx)
+	require.ErrorIs(t, err, startErr)
+	assert.Equal(t, []string{"startContainer", "stopContainer", "closeContainer"}, executorOrder)
+
+	jim.AssertExpectations(t)
+	sfm.AssertExpectations(t)
+	sm.AssertExpectations(t)
 }
