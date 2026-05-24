@@ -113,9 +113,10 @@ func (sar *stepActionRemote) prepareActionExecutor() common.Executor {
 		}
 
 		actionDir := fmt.Sprintf("%s/%s", sar.RunContext.ActionCacheDir(), sar.Step.UsesHash())
-		token := getGitCloneToken(sar.getRunContext().Config, sar.remoteAction.CloneURL(sar.RunContext.Config.DefaultActionInstance))
+		defaultActionURL := sar.RunContext.Config.DefaultActionURL()
+		token := getGitCloneToken(sar.getRunContext().Config, sar.remoteAction.CloneURL(defaultActionURL))
 		gitClone := stepActionRemoteNewCloneExecutor(git.NewGitCloneExecutorInput{
-			URL:         sar.remoteAction.CloneURL(sar.RunContext.Config.DefaultActionInstance),
+			URL:         sar.remoteAction.CloneURL(defaultActionURL),
 			Ref:         sar.remoteAction.Ref,
 			Dir:         actionDir,
 			Token:       token,
@@ -274,7 +275,7 @@ func (sar *stepActionRemote) cloneSkipTLS() bool {
 	if sar.remoteAction.URL == "" {
 		// Empty URL means the default action instance should be used
 		// Return true if the URL of the Gitea instance is the same as the URL of the default action instance
-		return sar.RunContext.Config.DefaultActionInstance == sar.RunContext.Config.GitHubInstance
+		return sar.RunContext.Config.DefaultActionURL() == sar.RunContext.Config.GitHubInstance
 	}
 	// Return true if the URL of the remote action is the same as the URL of the Gitea instance
 	return sar.remoteAction.URL == sar.RunContext.Config.GitHubInstance

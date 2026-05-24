@@ -118,6 +118,10 @@ lint-go: ## lint go files
 lint-go-fix: ## lint go files and fix issues
 	$(GO) run $(GOLANGCI_LINT_PACKAGE) run --fix
 
+.PHONY: lint-pr-title
+lint-pr-title: ## lint PR title against Conventional Commits (set PR_TITLE=...)
+	@node ./tools/lint-pr-title.ts
+
 .PHONY: security-check
 security-check: deps-tools
 	GOEXPERIMENT= $(GO) run $(GOVULNCHECK_PACKAGE) -show color ./... || true

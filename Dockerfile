@@ -1,7 +1,7 @@
 ### BUILDER STAGE
 #
 #
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26-alpine3.23 AS builder
 
 # Do not remove `git` here, it is required for getting runner version when executing `make build`
 RUN apk add --no-cache make git
@@ -17,7 +17,12 @@ RUN make clean && make build
 ### DIND VARIANT
 #
 #
-FROM docker:29-dind AS dind
+FROM docker:29.5.2-dind AS dind
+
+ARG VERSION=dev
+
+LABEL org.opencontainers.image.source="https://gitea.com/gitea/runner"
+LABEL org.opencontainers.image.version="${VERSION}"
 
 RUN apk add --no-cache s6 bash git tzdata
 
@@ -32,7 +37,12 @@ ENTRYPOINT ["s6-svscan","/etc/s6"]
 ### DIND-ROOTLESS VARIANT
 #
 #
-FROM docker:29-dind-rootless AS dind-rootless
+FROM docker:29.5.2-dind-rootless AS dind-rootless
+
+ARG VERSION=dev
+
+LABEL org.opencontainers.image.source="https://gitea.com/gitea/runner"
+LABEL org.opencontainers.image.version="${VERSION}"
 
 USER root
 RUN apk add --no-cache s6 bash git tzdata
@@ -53,7 +63,13 @@ ENTRYPOINT ["s6-svscan","/etc/s6"]
 ### BASIC VARIANT
 #
 #
-FROM alpine AS basic
+FROM alpine:3.23 AS basic
+
+ARG VERSION=dev
+
+LABEL org.opencontainers.image.source="https://gitea.com/gitea/runner"
+LABEL org.opencontainers.image.version="${VERSION}"
+
 RUN apk add --no-cache tini bash git tzdata
 
 COPY --from=builder /opt/src/runner/gitea-runner /usr/local/bin/gitea-runner

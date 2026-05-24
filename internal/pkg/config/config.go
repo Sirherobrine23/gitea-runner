@@ -52,6 +52,7 @@ type Cache struct {
 	Port           uint16 `yaml:"port"`            // Port specifies the caching port.
 	ExternalServer string `yaml:"external_server"` // ExternalServer specifies the URL of external cache server
 	ExternalSecret string `yaml:"external_secret"` // ExternalSecret is a shared secret between this runner and an external gitea-runner cache-server, enabling per-job ACTIONS_RUNTIME_TOKEN authentication and repo scoping over the network. Leave empty to keep the legacy unauthenticated behavior.
+	OfflineMode    bool   `yaml:"offline_mode"`    // OfflineMode reuses a cached action without fetching from the remote; a moved tag or branch stays at the cached commit until the cache entry is removed.
 }
 
 // Container represents the configuration for the container.
@@ -109,7 +110,6 @@ func LoadDefault(file string) (*Config, error) {
 			return nil, fmt.Errorf("parse config file %q for defaults metadata: %w", file, err)
 		}
 	}
-	compatibleWithOldEnvs(file != "", cfg)
 
 	if cfg.Runner.EnvFile != "" {
 		if stat, err := os.Stat(cfg.Runner.EnvFile); err == nil && !stat.IsDir() {

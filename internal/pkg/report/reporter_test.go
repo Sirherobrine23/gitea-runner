@@ -219,6 +219,59 @@ func TestReporter_Fire(t *testing.T) {
 	})
 }
 
+func TestReporter_LogLevelFiltering(t *testing.T) {
+	// Set global level to Info so Debug entries should be filtered.
+	origLevel := log.GetLevel()
+	log.SetLevel(log.InfoLevel)
+	defer log.SetLevel(origLevel)
+
+	client := mocks.NewClient(t)
+	client.On("UpdateLog", mock.Anything, mock.Anything).Return(func(_ context.Context, req *connect_go.Request[runnerv1.UpdateLogRequest]) (*connect_go.Response[runnerv1.UpdateLogResponse], error) {
+		return connect_go.NewResponse(&runnerv1.UpdateLogResponse{
+			AckIndex: req.Msg.Index + int64(len(req.Msg.Rows)),
+		}), nil
+	})
+	client.On("UpdateTask", mock.Anything, mock.Anything).Return(func(_ context.Context, req *connect_go.Request[runnerv1.UpdateTaskRequest]) (*connect_go.Response[runnerv1.UpdateTaskResponse], error) {
+		return connect_go.NewResponse(&runnerv1.UpdateTaskResponse{}), nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	taskCtx, err := structpb.NewStruct(map[string]any{})
+	require.NoError(t, err)
+	cfg, _ := config.LoadDefault("")
+	reporter := NewReporter(ctx, cancel, client, &runnerv1.Task{Context: taskCtx}, cfg)
+	reporter.RunDaemon()
+	defer func() {
+		require.NoError(t, reporter.Close(""))
+	}()
+	reporter.ResetSteps(2)
+
+	dataStep0 := log.Fields{"stage": "Main", "stepNumber": 0, "raw_output": true}
+	dataStep0Internal := log.Fields{"stage": "Main", "stepNumber": 0}
+
+	// raw_output entries always appear in job log regardless of level.
+	require.NoError(t, reporter.Fire(&log.Entry{Message: "step output", Data: dataStep0, Level: log.InfoLevel}))
+	require.NoError(t, reporter.Fire(&log.Entry{Message: "step debug output", Data: dataStep0, Level: log.DebugLevel}))
+	assert.Equal(t, int64(2), reporter.state.Steps[0].LogLength, "raw_output entries must always be forwarded")
+
+	// Non-raw_output entries during steps are not added to logRows regardless of level.
+	require.NoError(t, reporter.Fire(&log.Entry{Message: "internal info", Data: dataStep0Internal, Level: log.InfoLevel}))
+	require.NoError(t, reporter.Fire(&log.Entry{Message: "internal debug", Data: dataStep0Internal, Level: log.DebugLevel}))
+
+	// stepResult at DebugLevel (skipped step) must still update state even when filtered from log.
+	require.NoError(t, reporter.Fire(&log.Entry{
+		Message: "Skipping step",
+		Data: log.Fields{
+			"stage":      "Main",
+			"stepNumber": 1,
+			"stepResult": "skipped",
+		},
+		Level: log.DebugLevel,
+	}))
+	assert.Equal(t, runnerv1.Result_RESULT_SKIPPED, reporter.state.Steps[1].Result,
+		"stepResult at DebugLevel must update step state even when log entry is filtered from job log output")
+}
+
 // TestReporter_EphemeralRunnerDeletion reproduces the exact scenario from
 // https://gitea.com/gitea/runner/issues/793:
 //

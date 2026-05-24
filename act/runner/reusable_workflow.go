@@ -308,6 +308,11 @@ func getGitCloneToken(conf *Config, cloneURL string) string {
 // 1. cloneURL is from the same Gitea instance that the runner is registered to
 // 2. the cloneURL does not have basic auth embedded
 func shouldCloneURLUseToken(instanceURL, cloneURL string) bool {
+	if !strings.HasPrefix(instanceURL, "http://") &&
+		!strings.HasPrefix(instanceURL, "https://") {
+		instanceURL = "https://" + instanceURL
+	}
+
 	u1, err1 := url.Parse(instanceURL)
 	u2, err2 := url.Parse(cloneURL)
 	if err1 != nil || err2 != nil {

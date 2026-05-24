@@ -220,12 +220,12 @@ func (rc *RunContext) startHostEnvironment() common.Executor {
 		}
 		toolCache := filepath.Join(cacheDir, "tool_cache")
 		rc.JobContainer = &container.HostEnvironment{
-			Path:        path,
-			TmpDir:      runnerTmp,
-			ToolCache:   toolCache,
-			Workdir:     rc.Config.Workdir,
-			BindWorkdir: rc.Config.BindWorkdir,
-			ActPath:     actPath,
+			Path:         path,
+			TmpDir:       runnerTmp,
+			ToolCache:    toolCache,
+			Workdir:      rc.Config.Workdir,
+			CleanWorkdir: rc.Config.CleanWorkdir,
+			ActPath:      actPath,
 			CleanUp: func() {
 				os.RemoveAll(miscpath)
 			},
@@ -601,10 +601,34 @@ func (rc *RunContext) interpolateOutputs() common.Executor {
 
 func (rc *RunContext) startContainer() common.Executor {
 	return func(ctx context.Context) error {
+		var err error
 		if rc.IsHostEnv(ctx) {
-			return rc.startHostEnvironment()(ctx)
+			err = rc.startHostEnvironment()(ctx)
+		} else {
+			err = rc.startJobContainer()(ctx)
 		}
-		return rc.startJobContainer()(ctx)
+		if err != nil {
+			// The job executor's teardown only runs after a successful start, so a failed
+			// start would otherwise leak the per-job network and container.
+			rc.cleanupFailedStart(ctx)
+		}
+		return err
+	}
+}
+
+func (rc *RunContext) cleanupFailedStart(ctx context.Context) {
+	if rc.cleanUpJobContainer == nil {
+		return
+	}
+	cleanCtx := ctx
+	if ctx.Err() != nil {
+		// the start likely failed because ctx was cancelled, detach so teardown still runs
+		var cancel context.CancelFunc
+		cleanCtx, cancel = context.WithTimeout(common.WithLogger(context.Background(), common.Logger(ctx)), time.Minute)
+		defer cancel()
+	}
+	if err := rc.cleanUpJobContainer(cleanCtx); err != nil {
+		common.Logger(ctx).Errorf("Error while cleaning up after failed container start for job %s: %v", rc.JobName, err)
 	}
 }
 

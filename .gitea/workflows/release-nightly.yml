@@ -71,6 +71,11 @@ jobs:
       - name: Echo the tag
         run: echo "${{ env.DOCKER_ORG }}/runner:nightly${{ matrix.variant.tag_suffix }}"
 
+      - name: Get Meta
+        id: meta
+        run: |
+          echo REPO_VERSION=$(git describe --tags --always | sed 's/-/+/' | sed 's/^v//') >> $GITHUB_OUTPUT
+
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
@@ -83,3 +88,5 @@ jobs:
           push: true
           tags: |
             ${{ env.DOCKER_ORG }}/runner:nightly${{ matrix.variant.tag_suffix }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.REPO_VERSION }}

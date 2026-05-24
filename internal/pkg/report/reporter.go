@@ -205,7 +205,7 @@ func (r *Reporter) Fire(entry *log.Entry) error {
 				urgentState = true
 			}
 		}
-		if !r.duringSteps() {
+		if r.shouldAppendLogRow(entry) {
 			r.logRows = appendIfNotNil(r.logRows, r.parseLogRow(entry))
 		}
 		r.unlockAndNotify(urgentState)
@@ -219,7 +219,7 @@ func (r *Reporter) Fire(entry *log.Entry) error {
 		}
 	}
 	if step == nil {
-		if !r.duringSteps() {
+		if r.shouldAppendLogRow(entry) {
 			r.logRows = appendIfNotNil(r.logRows, r.parseLogRow(entry))
 		}
 		r.unlockAndNotify(false)
@@ -246,7 +246,7 @@ func (r *Reporter) Fire(entry *log.Entry) error {
 				r.logRows = append(r.logRows, row)
 			}
 		}
-	} else if !r.duringSteps() {
+	} else if r.shouldAppendLogRow(entry) {
 		r.logRows = appendIfNotNil(r.logRows, r.parseLogRow(entry))
 	}
 	if v, ok := entry.Data["stepResult"]; ok && isJobStepEntry(entry) {
@@ -576,6 +576,13 @@ func (r *Reporter) duringSteps() bool {
 	return true
 }
 
+// shouldAppendLogRow reports whether a non-raw_output entry should be written
+// to the job log: only when we are between steps and the entry's level is
+// within the globally configured log level.
+func (r *Reporter) shouldAppendLogRow(entry *log.Entry) bool {
+	return !r.duringSteps() && entry.Level <= log.GetLevel()
+}
+
 var stringToResult = map[string]runnerv1.Result{
 	"success":   runnerv1.Result_RESULT_SUCCESS,
 	"failure":   runnerv1.Result_RESULT_FAILURE,
@@ -639,7 +646,7 @@ func (r *Reporter) handleCommand(originalContent, command, value string) *string
 }
 
 func (r *Reporter) parseLogRow(entry *log.Entry) *runnerv1.LogRow {
-	content := strings.TrimRightFunc(entry.Message, func(r rune) bool { return r == '\r' || r == '\n' })
+	content := strings.TrimRight(entry.Message, "\r\n")
 
 	matches := cmdRegex.FindStringSubmatch(content)
 	if matches != nil {

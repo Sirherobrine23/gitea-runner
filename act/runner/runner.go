@@ -30,7 +30,7 @@ type Config struct {
 	Actor                              string                       // the user that triggered the event
 	Workdir                            string                       // path to working directory
 	ActionCacheDir                     string                       // path used for caching action contents
-	ActionOfflineMode                  bool                         // when offline, use caching action contents
+	ActionOfflineMode                  bool                         // when offline, use cached action contents
 	BindWorkdir                        bool                         // bind the workdir to the job container
 	EventName                          string                       // name of event to run
 	EventPath                          string                       // path to JSON file to use for event.json in containers
@@ -73,6 +73,7 @@ type Config struct {
 	EventJSON             string                       // the content of JSON file to use for event.json in containers, overrides EventPath
 	ContainerNamePrefix   string                       // the prefix of container name
 	ContainerMaxLifetime  time.Duration                // the max lifetime of job containers
+	CleanWorkdir          bool                         // remove host executor workdir on teardown
 	DefaultActionInstance string                       // the default actions web site
 	PlatformPicker        func(labels []string) string // platform picker, it will take precedence over Platforms if isn't nil
 	JobLoggerLevel        *log.Level                   // the level of job logger
@@ -89,6 +90,17 @@ func (c Config) GetToken() string {
 		token = c.Secrets["GITEA_TOKEN"]
 	}
 	return token
+}
+
+// DefaultActionURL returns the host used for implicit remote actions.
+func (c Config) DefaultActionURL() string {
+	if c.DefaultActionInstance != "" {
+		return c.DefaultActionInstance
+	}
+	if c.GitHubInstance != "" {
+		return c.GitHubInstance
+	}
+	return "github.com"
 }
 
 type caller struct {

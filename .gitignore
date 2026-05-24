@@ -1,5 +1,6 @@
 /gitea-runner
 .env
+!/act/runner/testdata/secrets/.env
 .runner
 coverage.txt
 /config.yaml
@@ -10,4 +11,4 @@ coverage.txt
 .vscode
 __debug_bin
 # gorelease binary folder
-dist
+/dist

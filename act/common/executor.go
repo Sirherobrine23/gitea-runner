@@ -12,24 +12,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// Warning that implements `error` but safe to ignore
-type Warning struct {
-	Message string
-}
-
-// Error the contract for error
-func (w Warning) Error() string {
-	return w.Message
-}
-
-// Warningf create a warning
-func Warningf(format string, args ...any) Warning {
-	w := Warning{
-		Message: fmt.Sprintf(format, args...),
-	}
-	return w
-}
-
 // Executor define contract for the steps of a workflow
 type Executor func(ctx context.Context) error
 
@@ -162,14 +144,8 @@ func NewParallelExecutor(parallel int, executors ...Executor) Executor {
 // Then runs another executor if this executor succeeds
 func (e Executor) Then(then Executor) Executor {
 	return func(ctx context.Context) error {
-		err := e(ctx)
-		if err != nil {
-			switch err.(type) {
-			case Warning:
-				Logger(ctx).Warning(err.Error())
-			default:
-				return err
-			}
+		if err := e(ctx); err != nil {
+			return err
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()

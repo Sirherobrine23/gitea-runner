@@ -102,6 +102,9 @@ cache:
   # (or `gitea-runner cache-server`) is in use: the runner pre-registers each job's ACTIONS_RUNTIME_TOKEN with the
   # cache-server, and the cache-server enforces bearer auth + per-repo cache isolation.
   external_secret: ""
+  # When true, reuse a cached action instead of fetching from the remote on every job. Note: a moved tag
+  # (e.g. a re-tagged "v6") or an updated branch stays at the cached commit until its cache entry is removed.
+  offline_mode: false
 
 container:
   # Specifies the network to which the container will connect.

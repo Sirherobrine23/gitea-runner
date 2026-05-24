@@ -19,6 +19,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	assert "github.com/stretchr/testify/assert"
+	require "github.com/stretchr/testify/require"
 	yaml "go.yaml.in/yaml/v4"
 )
 
@@ -658,4 +659,54 @@ func TestPrintStartJobContainerGroupGolden(t *testing.T) {
 		"",
 	}, "\n")
 	assert.Equal(t, want, buf.String())
+}
+
+func TestRunContext_cleanupFailedStart(t *testing.T) {
+	type ctxKey string
+	const sentinel = ctxKey("sentinel")
+
+	// the fresh context is cancelled via defer on return, so capture state inside the stub
+	type capture struct {
+		calls    int
+		err      error
+		sentinel any
+	}
+	newRC := func(c *capture) *RunContext {
+		return &RunContext{
+			JobName: "job",
+			cleanUpJobContainer: func(ctx context.Context) error {
+				c.calls++
+				c.err = ctx.Err()
+				c.sentinel = ctx.Value(sentinel)
+				return nil
+			},
+		}
+	}
+
+	t.Run("runs teardown on the live context", func(t *testing.T) {
+		var c capture
+		ctx := context.WithValue(context.Background(), sentinel, "v")
+
+		newRC(&c).cleanupFailedStart(ctx)
+
+		assert.Equal(t, 1, c.calls)
+		require.NoError(t, c.err)
+		assert.Equal(t, "v", c.sentinel)
+	})
+
+	t.Run("falls back to a fresh context when the input is done", func(t *testing.T) {
+		var c capture
+		ctx, cancel := context.WithCancel(context.WithValue(context.Background(), sentinel, "v"))
+		cancel()
+
+		newRC(&c).cleanupFailedStart(ctx)
+
+		assert.Equal(t, 1, c.calls)
+		require.NoError(t, c.err)
+		assert.Nil(t, c.sentinel)
+	})
+
+	t.Run("no-op when there is nothing to clean up", func(t *testing.T) {
+		assert.NotPanics(t, func() { (&RunContext{}).cleanupFailedStart(context.Background()) })
+	})
 }

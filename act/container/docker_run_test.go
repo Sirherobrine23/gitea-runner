@@ -11,6 +11,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -374,4 +376,41 @@ func TestCheckVolumes(t *testing.T) {
 			assert.Equal(t, tc.expectedBinds, hostConf.Binds)
 		})
 	}
+}
+
+func TestCheckVolumesRejectsEscapingHostPaths(t *testing.T) {
+	logger, _ := test.NewNullLogger()
+	ctx := common.WithLogger(context.Background(), logger)
+
+	base := t.TempDir()
+	allowed := filepath.Join(base, "allowed")
+	denied := filepath.Join(base, "denied")
+	require.NoError(t, os.MkdirAll(allowed, 0o700))
+	require.NoError(t, os.MkdirAll(denied, 0o700))
+
+	cr := &containerReference{
+		input: &NewContainerInput{
+			ValidVolumes: []string{filepath.Join(allowed, "**")},
+		},
+	}
+
+	escapingPath := allowed + string(filepath.Separator) + ".." + string(filepath.Separator) + "denied"
+	_, hostConf := cr.sanitizeConfig(ctx, &container.Config{}, &container.HostConfig{
+		Binds: []string{escapingPath + ":/mnt"},
+	})
+	assert.Empty(t, hostConf.Binds)
+
+	linkPath := filepath.Join(allowed, "link")
+	if err := os.Symlink(denied, linkPath); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	_, hostConf = cr.sanitizeConfig(ctx, &container.Config{}, &container.HostConfig{
+		Binds: []string{linkPath + ":/mnt"},
+	})
+	assert.Empty(t, hostConf.Binds)
+
+	_, hostConf = cr.sanitizeConfig(ctx, &container.Config{}, &container.HostConfig{
+		Binds: []string{filepath.Join(linkPath, "missing") + ":/mnt"},
+	})
+	assert.Empty(t, hostConf.Binds)
 }

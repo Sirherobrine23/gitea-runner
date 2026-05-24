@@ -132,7 +132,6 @@ func runDaemon(ctx context.Context, daemArgs *daemonArgs, configFile *string) fu
 			cfg.Runner.Insecure,
 			reg.UUID,
 			reg.Token,
-			ver.Version(),
 		)
 
 		runner := run.NewRunner(cfg, reg, cli)

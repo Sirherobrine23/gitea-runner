@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -432,6 +433,57 @@ func TestStepActionRemotePreThroughActionToken(t *testing.T) {
 			sarm.AssertExpectations(t)
 		})
 	}
+}
+
+func TestStepActionRemoteUsesGitHubInstanceWhenDefaultActionInstanceEmpty(t *testing.T) {
+	ctx := context.Background()
+
+	var actualURL string
+	sarm := &stepActionRemoteMocks{}
+
+	origStepAtionRemoteNewCloneExecutor := stepActionRemoteNewCloneExecutor
+	stepActionRemoteNewCloneExecutor = func(input git.NewGitCloneExecutorInput) common.Executor {
+		return func(ctx context.Context) error {
+			actualURL = input.URL
+			return nil
+		}
+	}
+	defer func() {
+		stepActionRemoteNewCloneExecutor = origStepAtionRemoteNewCloneExecutor
+	}()
+
+	sar := &stepActionRemote{
+		Step: &model.Step{
+			Uses: "actions/setup-go@v4",
+		},
+		RunContext: &RunContext{
+			Config: &Config{
+				GitHubInstance:        "gitea.example",
+				DefaultActionInstance: "",
+				ActionCacheDir:        t.TempDir(),
+			},
+			Run: &model.Run{
+				JobID: "1",
+				Workflow: &model.Workflow{
+					Jobs: map[string]*model.Job{
+						"1": {},
+					},
+				},
+			},
+		},
+		readAction: sarm.readAction,
+	}
+
+	suffixMatcher := func(suffix string) any {
+		return mock.MatchedBy(func(actionDir string) bool {
+			return strings.HasSuffix(actionDir, suffix)
+		})
+	}
+	sarm.On("readAction", sar.Step, suffixMatcher(sar.Step.UsesHash()), "", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
+
+	require.NoError(t, sar.prepareActionExecutor()(ctx))
+	assert.Equal(t, "https://gitea.example/actions/setup-go", actualURL)
+	sarm.AssertExpectations(t)
 }
 
 func TestStepActionRemotePost(t *testing.T) {

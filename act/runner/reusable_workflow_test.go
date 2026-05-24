@@ -123,6 +123,65 @@ func TestNewReusableWorkflowExecutorHoldsCloneLock(t *testing.T) {
 	}
 }
 
+func TestGetGitCloneTokenWithSchemalessGiteaInstance(t *testing.T) {
+	conf := &Config{
+		GitHubInstance: "gitea.example.net",
+		Secrets: map[string]string{
+			"GITEA_TOKEN": "token-value",
+		},
+	}
+
+	token := getGitCloneToken(conf, "https://gitea.example.net/actions/tools")
+
+	require.Equal(t, "token-value", token)
+}
+
+func TestShouldCloneURLUseToken(t *testing.T) {
+	tests := []struct {
+		name        string
+		instanceURL string
+		cloneURL    string
+		want        bool
+	}{
+		{
+			name:        "same host with schemaless instance",
+			instanceURL: "gitea.example.net",
+			cloneURL:    "https://gitea.example.net/actions/tools",
+			want:        true,
+		},
+		{
+			name:        "same host with schemaless instance and port",
+			instanceURL: "gitea.example.net:3000",
+			cloneURL:    "https://gitea.example.net:3000/actions/tools",
+			want:        true,
+		},
+		{
+			name:        "different host",
+			instanceURL: "gitea.example.net",
+			cloneURL:    "https://github.com/actions/tools",
+			want:        false,
+		},
+		{
+			name:        "embedded basic auth",
+			instanceURL: "gitea.example.net",
+			cloneURL:    "https://user:pass@gitea.example.net/actions/tools",
+			want:        false,
+		},
+		{
+			name:        "invalid clone URL",
+			instanceURL: "gitea.example.net",
+			cloneURL:    "://gitea.example.net/actions/tools",
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, shouldCloneURLUseToken(tt.instanceURL, tt.cloneURL))
+		})
+	}
+}
+
 func gitMust(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

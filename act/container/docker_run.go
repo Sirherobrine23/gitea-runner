@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -968,22 +969,7 @@ func (cr *containerReference) sanitizeConfig(ctx context.Context, config *contai
 	logger := common.Logger(ctx)
 
 	if len(cr.input.ValidVolumes) > 0 {
-		globs := make([]glob.Glob, 0, len(cr.input.ValidVolumes))
-		for _, v := range cr.input.ValidVolumes {
-			if g, err := glob.Compile(v); err != nil {
-				logger.Errorf("create glob from %s error: %v", v, err)
-			} else {
-				globs = append(globs, g)
-			}
-		}
-		isValid := func(v string) bool {
-			for _, g := range globs {
-				if g.Match(v) {
-					return true
-				}
-			}
-			return false
-		}
+		matcher := newValidVolumeMatcher(ctx, cr.input.ValidVolumes)
 		// sanitize binds
 		sanitizedBinds := make([]string, 0, len(hostConfig.Binds))
 		for _, bind := range hostConfig.Binds {
@@ -997,7 +983,7 @@ func (cr *containerReference) sanitizeConfig(ctx context.Context, config *contai
 				sanitizedBinds = append(sanitizedBinds, bind)
 				continue
 			}
-			if isValid(parsed.Source) {
+			if matcher.isValid(parsed.Source, mount.Type(parsed.Type)) {
 				sanitizedBinds = append(sanitizedBinds, bind)
 			} else {
 				logger.Warnf("[%s] is not a valid volume, will be ignored", parsed.Source)
@@ -1007,7 +993,7 @@ func (cr *containerReference) sanitizeConfig(ctx context.Context, config *contai
 		// sanitize mounts
 		sanitizedMounts := make([]mount.Mount, 0, len(hostConfig.Mounts))
 		for _, mt := range hostConfig.Mounts {
-			if isValid(mt.Source) {
+			if matcher.isValid(mt.Source, mt.Type) {
 				sanitizedMounts = append(sanitizedMounts, mt)
 			} else {
 				logger.Warnf("[%s] is not a valid volume, will be ignored", mt.Source)
@@ -1020,4 +1006,130 @@ func (cr *containerReference) sanitizeConfig(ctx context.Context, config *contai
 	}
 
 	return config, hostConfig
+}
+
+type validVolumeMatcher struct {
+	allowAll bool
+	named    []glob.Glob
+	host     []glob.Glob
+}
+
+func newValidVolumeMatcher(ctx context.Context, validVolumes []string) validVolumeMatcher {
+	logger := common.Logger(ctx)
+	ret := validVolumeMatcher{
+		named: make([]glob.Glob, 0, len(validVolumes)),
+		host:  make([]glob.Glob, 0, len(validVolumes)),
+	}
+
+	for _, v := range validVolumes {
+		if v == "**" {
+			ret.allowAll = true
+			continue
+		}
+		if !isHostVolumePattern(v) {
+			if g, err := glob.Compile(v); err != nil {
+				logger.Errorf("create glob from %s error: %v", v, err)
+			} else {
+				ret.named = append(ret.named, g)
+			}
+			continue
+		}
+		normalized, err := normalizeHostVolumePath(v)
+		if err != nil {
+			logger.Errorf("normalize volume pattern %s error: %v", v, err)
+			continue
+		}
+		if g, err := glob.Compile(normalized); err != nil {
+			logger.Errorf("create glob from %s error: %v", normalized, err)
+		} else {
+			ret.host = append(ret.host, g)
+		}
+	}
+
+	return ret
+}
+
+func (m validVolumeMatcher) isValid(source string, sourceType mount.Type) bool {
+	if m.allowAll {
+		return true
+	}
+	if isHostVolumeSource(source, sourceType) {
+		normalized, err := normalizeHostVolumePath(source)
+		if err != nil {
+			return false
+		}
+		for _, g := range m.host {
+			if g.Match(normalized) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, g := range m.named {
+		if g.Match(source) {
+			return true
+		}
+	}
+	return false
+}
+
+func isHostVolumePattern(pattern string) bool {
+	return filepath.IsAbs(pattern) ||
+		strings.HasPrefix(pattern, "."+string(filepath.Separator)) ||
+		strings.HasPrefix(pattern, ".."+string(filepath.Separator)) ||
+		strings.Contains(pattern, "/") ||
+		strings.Contains(pattern, `\`)
+}
+
+func isHostVolumeSource(source string, sourceType mount.Type) bool {
+	if sourceType == mount.TypeBind {
+		return true
+	}
+	if sourceType == mount.TypeVolume {
+		return false
+	}
+	return isHostVolumePattern(source)
+}
+
+func normalizeHostVolumePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return evalSymlinksExistingPrefix(abs)
+}
+
+func evalSymlinksExistingPrefix(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return filepath.Clean(resolved), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+
+	current := path
+	var missing []string
+	for {
+		_, err := os.Lstat(current)
+		if err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
+			}
+			for _, name := range slices.Backward(missing) {
+				resolved = filepath.Join(resolved, name)
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return filepath.Clean(path), nil
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }

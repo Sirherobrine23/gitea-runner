@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -336,6 +337,54 @@ func TestHandler(t *testing.T) {
 			defer resp.Body.Close()
 			assert.Equal(t, 400, resp.StatusCode)
 		}
+	})
+
+	t.Run("upload write failure returns only error", func(t *testing.T) {
+		key := strings.ToLower(t.Name())
+		version := "c19da02a2bd7e77277f1ac29ab45c09b7d46a4ee758284e26bb3045ad11d9d20"
+		var id uint64
+		{
+			body, err := json.Marshal(&Request{
+				Key:     key,
+				Version: version,
+				Size:    100,
+			})
+			require.NoError(t, err)
+			resp, err := testClient.Post(base+"/caches", "application/json", bytes.NewReader(body))
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, 200, resp.StatusCode)
+
+			got := struct {
+				CacheID uint64 `json:"cacheId"`
+			}{}
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+			id = got.CacheID
+		}
+
+		storageFile := filepath.Join(dir, "not-a-directory")
+		require.NoError(t, os.WriteFile(storageFile, []byte("blocked"), 0o600))
+		originalStorage := handler.storage
+		handler.storage = &Storage{rootDir: storageFile}
+		defer func() {
+			handler.storage = originalStorage
+		}()
+
+		req, err := http.NewRequest(http.MethodPatch,
+			fmt.Sprintf("%s/caches/%d", base, id), bytes.NewReader(make([]byte, 100)))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("Content-Range", "bytes 0-99/*")
+		resp, err := testClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, 500, resp.StatusCode)
+
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		var got map[string]string
+		require.NoError(t, json.Unmarshal(body, &got))
+		assert.NotEmpty(t, got["error"])
 	})
 
 	t.Run("commit early", func(t *testing.T) {

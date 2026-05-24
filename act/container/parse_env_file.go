@@ -29,6 +29,8 @@ func parseEnvFile(e Container, srcPath string, env *map[string]string) common.Ex
 			return err
 		}
 		s := bufio.NewScanner(reader)
+		// Default 64 KiB max token size is too small for realistic env-file lines; allow up to 16 MiB.
+		s.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 		for s.Scan() {
 			line := s.Text()
 			singleLineEnv := strings.Index(line, "=")
@@ -50,6 +52,9 @@ func parseEnvFile(e Container, srcPath string, env *map[string]string) common.Ex
 					}
 					multiLineEnvContent += content
 				}
+				if err := s.Err(); err != nil {
+					return fmt.Errorf("reading env file: %w", err)
+				}
 				if !delimiterFound {
 					return fmt.Errorf("invalid format delimiter '%v' not found before end of file", multiLineEnvDelimiter)
 				}
@@ -57,6 +62,9 @@ func parseEnvFile(e Container, srcPath string, env *map[string]string) common.Ex
 			} else {
 				return fmt.Errorf("invalid format '%v', expected a line with '=' or '<<'", line)
 			}
+		}
+		if err := s.Err(); err != nil {
+			return fmt.Errorf("reading env file: %w", err)
 		}
 		env = &localEnv
 		return nil

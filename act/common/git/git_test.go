@@ -279,6 +279,54 @@ func TestGitCloneExecutorNonFastForwardRef(t *testing.T) {
 	assert.Equal(t, "second", strings.TrimSpace(string(out)), "working tree should be at the latest commit")
 }
 
+func TestGitCloneExecutorOfflineMode(t *testing.T) {
+	gitConfig()
+
+	// Build a local "remote" with a single commit on main.
+	remoteDir := t.TempDir()
+	require.NoError(t, gitCmd("init", "--bare", "--initial-branch=main", remoteDir))
+	workDir := t.TempDir()
+	require.NoError(t, gitCmd("clone", remoteDir, workDir))
+	require.NoError(t, gitCmd("-C", workDir, "checkout", "-b", "main"))
+	require.NoError(t, gitCmd("-C", workDir, "commit", "--allow-empty", "-m", "initial"))
+	require.NoError(t, gitCmd("-C", workDir, "push", "-u", "origin", "main"))
+
+	// Prime the cache with an online clone of main.
+	cacheDir := t.TempDir()
+	require.NoError(t, NewGitCloneExecutor(NewGitCloneExecutorInput{
+		URL: remoteDir,
+		Ref: "main",
+		Dir: cacheDir,
+	})(context.Background()))
+
+	t.Run("cached branch resolves without fetching", func(t *testing.T) {
+		// Offline reuse of a cached branch must succeed even though ResolveRevision(input.Ref)
+		// finds no local refs/heads/<ref>.
+		err := NewGitCloneExecutor(NewGitCloneExecutorInput{
+			URL:         remoteDir,
+			Ref:         "main",
+			Dir:         cacheDir,
+			OfflineMode: true,
+		})(context.Background())
+		require.NoError(t, err)
+
+		out, err := exec.Command("git", "-C", cacheDir, "log", "--oneline", "-1", "--format=%s").Output()
+		require.NoError(t, err)
+		assert.Equal(t, "initial", strings.TrimSpace(string(out)))
+	})
+
+	t.Run("unresolvable cached ref returns error", func(t *testing.T) {
+		// The ref was never cached; offline mode cannot resolve it and must return an error.
+		err := NewGitCloneExecutor(NewGitCloneExecutorInput{
+			URL:         remoteDir,
+			Ref:         "never-fetched",
+			Dir:         cacheDir,
+			OfflineMode: true,
+		})(context.Background())
+		require.Error(t, err)
+	})
+}
+
 func gitConfig() {
 	if os.Getenv("GITHUB_ACTIONS") == "true" {
 		var err error

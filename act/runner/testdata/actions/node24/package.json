@@ -1,21 +1,5 @@
 {
   "name": "node24",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "type": "module",
-  "scripts": {
-    "build": "ncc build index.js"
-  },
-  "license": "ISC",
-  "dependencies": {
-    "@actions/core": "^3.0.1",
-    "@actions/github": "^9.1.1"
-  },
-  "devDependencies": {
-    "@vercel/ncc": "^0.38.4"
-  },
-  "engines": {
-    "node": ">=24"
-  }
+  "private": true,
+  "type": "module"
 }
