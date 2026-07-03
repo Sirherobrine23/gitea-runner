@@ -579,32 +579,35 @@ func applyPullRequestTargetCheckoutContext(preset *model.GithubContext) {
 	if preset == nil || preset.EventName != "pull_request_target" {
 		return
 	}
-	headSHA, _ := nestedString(preset.Event, "pull_request", "head", "sha")
+	headSHA := nestedString(preset.Event, "pull_request", "head", "sha")
 	if headSHA == "" {
 		return
 	}
 	preset.Sha = headSHA
 	preset.Ref = headSHA
-	if headRef, _ := nestedString(preset.Event, "pull_request", "head", "ref"); headRef != "" {
+	if headRef := nestedString(preset.Event, "pull_request", "head", "ref"); headRef != "" {
 		preset.HeadRef = headRef
 		preset.RefName = headRef
 	}
 }
 
-func nestedString(m map[string]any, keys ...string) (string, bool) {
+func nestedString(m map[string]any, keys ...string) string {
 	var current any = m
 	for _, key := range keys {
 		next, ok := current.(map[string]any)
 		if !ok {
-			return "", false
+			return ""
 		}
 		current, ok = next[key]
 		if !ok {
-			return "", false
+			return ""
 		}
 	}
-	value, ok := current.(string)
-	return value, ok
+	value := current.(string)
+	if value == "" {
+		return ""
+	}
+	return value
 }
 
 func (r *Runner) RunningCount() int64 {
