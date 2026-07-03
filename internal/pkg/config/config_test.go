@@ -48,6 +48,12 @@ func TestLoadDefault_DefaultsWorkdirCleanupAge(t *testing.T) {
 	assert.Equal(t, 10*time.Minute, cfg.Runner.IdleCleanupInterval)
 }
 
+func TestLoadDefault_DefaultsIdleFetchBackoffMax(t *testing.T) {
+	cfg, err := LoadDefault("")
+	require.NoError(t, err)
+	assert.Equal(t, time.Minute, cfg.Runner.FetchIntervalMax)
+}
+
 func TestLoadDefault_UsesConfiguredWorkdirCleanupAge(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

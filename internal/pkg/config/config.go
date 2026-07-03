@@ -183,7 +183,7 @@ func LoadDefault(file string) (*Config, error) {
 		cfg.Runner.FetchInterval = 2 * time.Second
 	}
 	if cfg.Runner.FetchIntervalMax <= 0 {
-		cfg.Runner.FetchIntervalMax = 5 * time.Second
+		cfg.Runner.FetchIntervalMax = time.Minute
 	}
 	if cfg.Runner.WorkdirCleanupAge == 0 && !definedRunnerKeys["workdir_cleanup_age"] {
 		cfg.Runner.WorkdirCleanupAge = 24 * time.Hour

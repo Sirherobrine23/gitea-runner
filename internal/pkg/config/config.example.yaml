@@ -39,7 +39,7 @@ runner:
   # The maximum interval for fetching the job from the Gitea instance.
   # The runner uses exponential backoff when idle, increasing the interval up to this maximum.
   # Set to 0 or same as fetch_interval to disable backoff.
-  fetch_interval_max: 5s
+  fetch_interval_max: 1m
   # While idle, remove stale bind-workdir task directories and orphaned host-mode
   # scratch directories (left behind when a host cleanup delete stalls) older than
   # this duration. Setting either workdir_cleanup_age or idle_cleanup_interval to 0
