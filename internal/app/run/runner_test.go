@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"gitea.com/gitea/runner/act/model"
 	clientmocks "gitea.com/gitea/runner/internal/pkg/client/mocks"
 	"gitea.com/gitea/runner/internal/pkg/config"
 	"gitea.com/gitea/runner/internal/pkg/ver"
@@ -90,6 +91,67 @@ func TestNewRunnerInitializesLabelsAndEnvironment(t *testing.T) {
 	require.Equal(t, "true", r.envs["GITEA_ACTIONS"])
 	require.NotEmpty(t, r.envs["GITEA_ACTIONS_RUNNER_VERSION"])
 	require.Nil(t, r.cacheHandler)
+}
+
+func TestApplyPullRequestTargetCheckoutContextUsesHeadSHA(t *testing.T) {
+	preset := &model.GithubContext{
+		EventName: "pull_request_target",
+		Sha:       "base-sha",
+		Ref:       "refs/heads/main",
+		RefName:   "main",
+		HeadRef:   "feature",
+		Event: map[string]any{
+			"pull_request": map[string]any{
+				"head": map[string]any{
+					"sha": "head-sha",
+					"ref": "contributor-branch",
+				},
+			},
+		},
+	}
+
+	applyPullRequestTargetCheckoutContext(preset)
+
+	require.Equal(t, "head-sha", preset.Sha)
+	require.Equal(t, "head-sha", preset.Ref)
+	require.Equal(t, "contributor-branch", preset.RefName)
+	require.Equal(t, "contributor-branch", preset.HeadRef)
+}
+
+func TestApplyPullRequestTargetCheckoutContextNoOpsWithoutHeadSHA(t *testing.T) {
+	preset := &model.GithubContext{
+		EventName: "pull_request_target",
+		Sha:       "base-sha",
+		Ref:       "refs/heads/main",
+		RefName:   "main",
+		Event:     map[string]any{},
+	}
+
+	applyPullRequestTargetCheckoutContext(preset)
+
+	require.Equal(t, "base-sha", preset.Sha)
+	require.Equal(t, "refs/heads/main", preset.Ref)
+	require.Equal(t, "main", preset.RefName)
+}
+
+func TestApplyPullRequestTargetCheckoutContextNoOpsForOtherEvents(t *testing.T) {
+	preset := &model.GithubContext{
+		EventName: "pull_request",
+		Sha:       "merge-sha",
+		Ref:       "refs/pull/1/merge",
+		Event: map[string]any{
+			"pull_request": map[string]any{
+				"head": map[string]any{
+					"sha": "head-sha",
+				},
+			},
+		},
+	}
+
+	applyPullRequestTargetCheckoutContext(preset)
+
+	require.Equal(t, "merge-sha", preset.Sha)
+	require.Equal(t, "refs/pull/1/merge", preset.Ref)
 }
 
 func taskWithDefaultActionsURL(url string) *runnerv1.Task {
