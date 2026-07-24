@@ -7,6 +7,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -449,6 +450,46 @@ func TestRunContextValidVolumes(t *testing.T) {
 	// combinations share one *Config, and the previous in-place append was a data race.
 	assert.Equal(t, []string{"my-vol", "/host/path"}, rc.Config.ValidVolumes)
 	assert.Len(t, rc.validVolumes(), len(got), "repeated calls must be stable, not accumulate")
+}
+
+func TestCleanupJobResourcesCleansServicesWithoutJobContainer(t *testing.T) {
+	service := &containerMock{}
+	service.On("Remove").Return(func(context.Context) error { return nil }).Once()
+	service.On("Close").Return(func(context.Context) error { return nil }).Once()
+
+	rc := &RunContext{
+		Config:            &Config{},
+		ServiceContainers: []container.ExecutionsEnvironment{service},
+	}
+
+	err := rc.cleanupJobResources("external-network", false)(context.Background())
+	require.NoError(t, err)
+	service.AssertExpectations(t)
+}
+
+// cleanup used to bail out on a previous step's error and on a cancelled context
+func TestCleanupJobResourcesContinuesAfterFailure(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "unix:///nonexistent.sock")
+
+	jobContainer := &containerMock{}
+	jobContainer.On("Remove").Return(func(context.Context) error { return errors.New("removal failed") }).Once()
+	service := &containerMock{}
+	service.On("Remove").Return(func(context.Context) error { return nil }).Once()
+	service.On("Close").Return(func(context.Context) error { return nil }).Once()
+
+	rc := &RunContext{
+		Name:              "job",
+		Config:            &Config{},
+		Run:               &model.Run{Workflow: &model.Workflow{Name: "wf"}, JobID: "job"},
+		JobContainer:      jobContainer,
+		ServiceContainers: []container.ExecutionsEnvironment{service},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.Error(t, rc.cleanupJobResources("job-network", true)(ctx))
+	jobContainer.AssertExpectations(t)
+	service.AssertExpectations(t)
 }
 
 // TestInterpolateOutputsIsPerMatrixCombo guards the matrix-output fix: combinations share one
