@@ -35,7 +35,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/gobwas/glob"
 	"github.com/joho/godotenv"
-	"github.com/kballard/go-shellquote"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -43,7 +42,6 @@ import (
 	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/client"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/spf13/pflag"
 )
 
 // drainGracePeriod bounds how long we wait for an output-copy goroutine to
@@ -57,6 +55,12 @@ const drainGracePeriod = 2 * time.Second
 func NewContainer(input *NewContainerInput) ExecutionsEnvironment {
 	cr := new(containerReference)
 	cr.input = input
+	// Resolved up front because the image pull runs before the container is created.
+	cf := createFlagsFromOptions(input.Options)
+	if cf.platform != "" {
+		cr.input.Platform = cf.platform
+	}
+	cr.pullPolicy = cf.pull
 	return cr
 }
 
@@ -137,6 +141,11 @@ func (cr *containerReference) Start(attach bool) common.Executor {
 }
 
 func (cr *containerReference) Pull(forcePull bool) common.Executor {
+	if cr.pullPolicy == pullPolicyNever {
+		return common.NewInfoExecutor("docker pull skipped image=%s, --pull=never in the options", cr.input.Image)
+	}
+	forcePull = forcePull || cr.pullPolicy == pullPolicyAlways
+
 	return common.
 		NewInfoExecutor("docker pull image=%s platform=%s username=%s forcePull=%t", cr.input.Image, cr.input.Platform, cr.input.Username, forcePull).
 		Then(
@@ -232,11 +241,12 @@ func (cr *containerReference) ReplaceLogWriter(stdout, stderr io.Writer) (io.Wri
 }
 
 type containerReference struct {
-	cli   client.APIClient
-	id    string
-	input *NewContainerInput
-	UID   int
-	GID   int
+	cli        client.APIClient
+	id         string
+	input      *NewContainerInput
+	pullPolicy string
+	UID        int
+	GID        int
 	// attachDone is closed by the attach() streaming goroutine once it has
 	// drained and flushed the container's output. wait() blocks on it so the
 	// tail of the log lands before the step proceeds.
@@ -411,17 +421,13 @@ func (cr *containerReference) mergeContainerConfigs(ctx context.Context, config 
 	}
 
 	// parse configuration from CLI container.options
-	flags := pflag.NewFlagSet("container_flags", pflag.ContinueOnError)
-	copts := addFlags(flags)
-
-	optionsArgs, err := shellquote.Split(input.Options)
+	flags, copts, cf, err := parseContainerOptions(input.Options)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Cannot split container options: '%s': '%w'", input.Options, err)
+		return nil, nil, err
 	}
 
-	err = flags.Parse(optionsArgs)
-	if err != nil {
-		return nil, nil, fmt.Errorf("Cannot parse container options: '%s': '%w'", input.Options, err)
+	if err := cf.validate(); err != nil {
+		return nil, nil, fmt.Errorf("Cannot process container options: '%s': '%w'", input.Options, err)
 	}
 
 	// FIXME: If everything is fine after gitea/act v0.260.0, remove the following comment.
@@ -476,6 +482,9 @@ func (cr *containerReference) mergeContainerConfigs(ctx context.Context, config 
 	}
 	hostConfig.Binds = binds
 	hostConfig.Mounts = mounts
+	if cf.name != "" {
+		logger.Warn("--name in the options will be ignored.")
+	}
 	if len(copts.netMode.Value()) > 0 {
 		logger.Warn("--network and --net in the options will be ignored.")
 	}
