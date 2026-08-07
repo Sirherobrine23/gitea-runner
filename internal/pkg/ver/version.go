@@ -3,8 +3,14 @@
 
 package ver
 
-// go build -ldflags "-X gitea.com/gitea/runner/internal/pkg/ver.version=1.2.3"
 var version = "dev"
+
+// SetVersion records the version injected into package main at build time.
+func SetVersion(v string) {
+	if v != "" {
+		version = v
+	}
+}
 
 func Version() string {
 	return version

@@ -11,3 +11,17 @@ func TestVersion(t *testing.T) {
 		t.Errorf("Version() = %q, want %q", got, version)
 	}
 }
+
+func TestSetVersion(t *testing.T) {
+	t.Cleanup(func() { version = "dev" })
+
+	SetVersion("v1.2.3")
+	if got := Version(); got != "v1.2.3" {
+		t.Errorf("Version() = %q, want %q", got, "v1.2.3")
+	}
+
+	SetVersion("")
+	if got := Version(); got != "v1.2.3" {
+		t.Errorf("Version() = %q, want %q", got, "v1.2.3")
+	}
+}

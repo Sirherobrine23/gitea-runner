@@ -72,7 +72,8 @@ else
 endif
 
 TAGS ?=
-LDFLAGS ?= -X "gitea.com/gitea/runner/internal/pkg/ver.version=v$(RELASE_VERSION)"
+LDFLAGS ?= -X "main.version=v$(RELASE_VERSION)"
+VERSION_CHECK_BIN := $(DIST)/version-check$(suffix $(EXECUTABLE))
 
 .PHONY: all
 all: build
@@ -113,7 +114,19 @@ deps-tools: ## install tool dependencies
 	wait
 
 .PHONY: checks
-checks: tidy-check fmt-check security-check ## run the non-lint source checks
+checks: tidy-check fmt-check security-check version-check ## run the non-lint source checks
+
+.PHONY: version-check
+version-check: ## verify the version is injected into the binary
+	@mkdir -p $(DIST)
+	@$(GO) build -tags '$(TAGS)' -ldflags '-s -w $(EXTLDFLAGS) -X "main.version=v0.0.0-injected"' -o $(VERSION_CHECK_BIN) .
+	@case "$$($(VERSION_CHECK_BIN) --version)" in \
+		*v0.0.0-injected*) ;; \
+		*) echo "version injection is broken, the Makefile -X target no longer matches a variable" >&2; exit 1;; \
+	esac
+	@rm -f $(VERSION_CHECK_BIN)
+	@# goreleaser builds releases from its own ldflags, so a stale -X target there ships an unversioned binary
+	@grep -q -- '-X main.version=' .goreleaser.yaml || { echo ".goreleaser.yaml no longer injects main.version" >&2; exit 1; }
 
 .PHONY: lint
 lint: lint-go lint-go-windows ## lint everything
