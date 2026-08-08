@@ -1,6 +1,6 @@
 /gitea-runner
 .env
-!/act/runner/testdata/secrets/.env
+!/internal/act/runner/testdata/secrets/.env
 .runner
 .runner.lock
 coverage.txt

@@ -24,7 +24,7 @@ jobs:
           check-latest: true
       - name: prepare anonymous docker config
         run: mkdir -p "$DOCKER_CONFIG" && echo '{}' > "$DOCKER_CONFIG/config.json"
-      # Pre-pull act/runner's two largest base images so a slow pull can't dominate `make test`;
+      # Pre-pull internal/act/runner's two largest base images so a slow pull can't dominate `make test`;
       # the rest (alpine/ubuntu) pull on demand, absorbed by the make-test -timeout. The host
       # daemon retains them between runs, so this is usually a fast manifest re-check.
       - name: pre-pull test images

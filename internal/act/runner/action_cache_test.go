@@ -31,7 +31,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 	cmd := exec.Command("git", args...)
 	// Fixed identity and host-config isolation so commits succeed offline regardless of the
-	// host's git config (mirrors gitCmd in act/common/git).
+	// host's git config (mirrors gitCmd in internal/act/common/git).
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
 		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",

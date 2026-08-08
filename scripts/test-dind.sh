@@ -25,7 +25,7 @@ case "${1:-}" in
   dind|dind-rootless) target="$1"; shift ;;
 esac
 [ "${1:-}" = "--" ] && shift
-[ $# -eq 0 ] && set -- -race -run '^TestDocker$|^TestDockerCopyToSymlinkPath$' ./act/container/
+[ $# -eq 0 ] && set -- -race -run '^TestDocker$|^TestDockerCopyToSymlinkPath$' ./internal/act/container/
 
 port="${DIND_TEST_PORT:-32375}"
 name="gitea-runner-dind-test-$$"

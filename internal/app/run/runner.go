@@ -216,7 +216,7 @@ func isTaskIDDir(name string) bool {
 
 // isHostScratchDir reports whether name is a per-job host-mode scratch dir:
 // hex.EncodeToString of 8 random bytes, i.e. exactly 16 lowercase hex chars
-// (see startHostEnvironment in act/runner/run_context.go). The narrow match
+// (see startHostEnvironment in internal/act/runner/run_context.go). The narrow match
 // leaves the sibling shared "tool_cache" dir and any operator data untouched.
 func isHostScratchDir(name string) bool {
 	if len(name) != 16 {
@@ -557,7 +557,7 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 }
 
 // patchToolkit reports whether act should edit the toolkit bundled into an action. It follows the
-// cache URL, because that is what the edits point the client at; see act/runner/toolkit_patch.go.
+// cache URL, because that is what the edits point the client at; see internal/act/runner/toolkit_patch.go.
 func (r *Runner) patchToolkit() bool {
 	return r.envs["ACTIONS_CACHE_URL"] != "" && (r.cfg.Cache.V2 == nil || *r.cfg.Cache.V2)
 }
