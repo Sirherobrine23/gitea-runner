@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"gitea.com/gitea/runner/act/artifactcache"
-	"gitea.com/gitea/runner/act/artifacts"
-	"gitea.com/gitea/runner/act/common"
-	"gitea.com/gitea/runner/act/runner"
+	"gitea.com/gitea/runner/internal/act/artifactcache"
+	"gitea.com/gitea/runner/internal/act/artifacts"
+	"gitea.com/gitea/runner/internal/act/common"
+	"gitea.com/gitea/runner/internal/act/runner"
 	"gitea.com/gitea/runner/internal/app/run"
 
 	"gitea.dev/actionslib/pkg/model"

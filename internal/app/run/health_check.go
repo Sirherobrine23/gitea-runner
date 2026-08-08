@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"gitea.com/gitea/runner/act/common"
+	"gitea.com/gitea/runner/internal/act/common"
 	"gitea.com/gitea/runner/internal/pkg/process"
 )
 

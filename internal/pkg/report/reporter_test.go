@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"gitea.com/gitea/runner/act/runner"
+	"gitea.com/gitea/runner/internal/act/runner"
 	"gitea.com/gitea/runner/internal/pkg/client/mocks"
 	"gitea.com/gitea/runner/internal/pkg/config"
 

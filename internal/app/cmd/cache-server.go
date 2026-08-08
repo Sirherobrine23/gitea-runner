@@ -9,7 +9,7 @@ import (
 	"os"
 	"os/signal"
 
-	"gitea.com/gitea/runner/act/artifactcache"
+	"gitea.com/gitea/runner/internal/act/artifactcache"
 	"gitea.com/gitea/runner/internal/pkg/config"
 
 	log "github.com/sirupsen/logrus"

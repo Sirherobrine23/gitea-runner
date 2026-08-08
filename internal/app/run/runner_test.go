@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitea.com/gitea/runner/act/runner"
+	"gitea.com/gitea/runner/internal/act/runner"
 	clientmocks "gitea.com/gitea/runner/internal/pkg/client/mocks"
 	"gitea.com/gitea/runner/internal/pkg/config"
 	"gitea.com/gitea/runner/internal/pkg/ver"

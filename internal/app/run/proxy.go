@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 
-	"gitea.com/gitea/runner/act/container"
+	"gitea.com/gitea/runner/internal/act/container"
 
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http/httpproxy"
