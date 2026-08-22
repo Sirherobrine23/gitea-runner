@@ -111,11 +111,11 @@ func actionScriptPaths(dir string, action *model.Action) []string {
 // patchToolkit edits the toolkit in an action's bundles, keeping each original beside them. Every
 // failure is silent and leaves the bundle as it was, which costs the cache client the v2 API and
 // an artifact action nothing at all.
-func patchToolkit(ctx context.Context, actionDir string, scripts []string) {
+func patchToolkit(ctx context.Context, actionDir, actionLocation string, scripts []string) {
 	if len(scripts) == 0 {
 		return
 	}
-	if _, err := os.Stat(filepath.Join(sidecarDir(actionDir), skipMarker)); err == nil {
+	if _, err := os.Stat(skipMarkerFor(actionDir, actionLocation)); err == nil {
 		return
 	}
 	defer git.AcquireCloneLock(actionDir)()
@@ -130,7 +130,7 @@ func patchToolkit(ctx context.Context, actionDir string, scripts []string) {
 // revertToolkit puts the originals back and stops this action being patched again, so the next job
 // runs it exactly as shipped. Called when a step failed with a patched bundle; it does not re-run
 // the step, because a step's outputs and env-file writes are already recorded by then.
-func revertToolkit(ctx context.Context, actionDir string, scripts []string) {
+func revertToolkit(ctx context.Context, actionDir, actionLocation string, scripts []string) {
 	if len(scripts) == 0 {
 		return
 	}
@@ -150,14 +150,20 @@ func revertToolkit(ctx context.Context, actionDir string, scripts []string) {
 		}
 	}
 	if reverted {
-		_ = os.WriteFile(filepath.Join(sidecarDir(actionDir), skipMarker), nil, 0o600)
-		common.Logger(ctx).Warnf("actions toolkit: restored the original %s, it will not be patched again", filepath.Base(actionDir))
+		_ = os.WriteFile(skipMarkerFor(actionDir, actionLocation), nil, 0o600)
+		common.Logger(ctx).Warnf("actions toolkit: restored the original %s, it will not be patched again", filepath.Base(actionLocation))
 	}
 }
 
-// sidecarDir holds an action's untouched bundles, and the marker that stops it being patched.
+// sidecarDir holds a checkout's untouched bundles, and the markers that stop actions being patched.
 func sidecarDir(actionDir string) string {
 	return actionDir + sidecarSuffix
+}
+
+// skipMarkerFor stops one action being patched again. It sits among that action's own originals, so
+// a sibling action sharing the checkout keeps being patched.
+func skipMarkerFor(actionDir, actionLocation string) string {
+	return originalFor(actionDir, filepath.Join(actionLocation, skipMarker))
 }
 
 // originalFor is where a script's untouched copy lives, or "" for a script the action's own

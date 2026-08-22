@@ -293,7 +293,9 @@ func removeGitIgnore(ctx context.Context, directory string) error {
 // same `act-dockeraction:latest` image on a shared docker daemon. A subsequent
 // repository would then silently run the image built for an earlier one.
 // Including the repository keeps the tag stable for caching within a repository
-// while preventing cross-repository collisions.
+// while preventing cross-repository collisions. A remote action needs the same
+// treatment, because its actionName is the shared checkout of its repository and
+// ref plus the action's path inside it.
 // See https://gitea.com/gitea/runner/issues/1039.
 func dockerActionImageTag(repository, actionName string, localAction bool) string {
 	name := actionName
@@ -302,11 +304,10 @@ func dockerActionImageTag(repository, actionName string, localAction bool) strin
 	}
 	// The human-readable name is sanitized by collapsing every non-alphanumeric character to "-".
 	sanitized := regexp.MustCompile("[^a-zA-Z0-9]").ReplaceAllString(name, "-")
-	if localAction {
-		// For local actions a short hash of the raw repository and action path is appended so the tag stays unique per repository.
-		sum := sha256.Sum256([]byte(repository + "\x00" + actionName))
-		sanitized += "-" + hex.EncodeToString(sum[:])[:12]
-	}
+	// Sanitizing is lossy, so a short hash of the raw repository and action path is appended, keeping
+	// the tag unique per repository and per action inside it.
+	sum := sha256.Sum256([]byte(repository + "\x00" + actionName))
+	sanitized += "-" + hex.EncodeToString(sum[:])[:12]
 	// "-dockeraction" ensures that "./", "./test " won't get converted to "act-:latest", "act-test-:latest" which are invalid docker image names
 	image := fmt.Sprintf("%s-dockeraction:%s", sanitized, "latest")
 	image = "act-" + strings.TrimLeft(image, "-")

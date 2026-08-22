@@ -35,6 +35,7 @@ type stepActionRemote struct {
 	remoteAction        *remoteAction
 	cacheDir            string
 	resolvedSha         string
+	downloaded          bool // this step fetched the action repository, rather than reusing a fetch of the job
 }
 
 var stepActionRemoteNewCloneExecutor = git.NewGitCloneExecutor
@@ -76,19 +77,28 @@ func (sar *stepActionRemote) prepareActionExecutor() common.Executor {
 				github.Token = sar.RunContext.Config.ReplaceGheActionTokenWithGithubCom
 			}
 		}
+
+		downloads := sar.RunContext.downloadedActions()
+		downloadKey := sar.downloadKey()
+
 		// Actions served from the action cache are read out of a git object store rather than a
 		// directory, so they never reach the bundle patch below and keep to the v1 cache API.
 		if sar.RunContext.Config.ActionCache != nil {
 			cache := sar.RunContext.Config.ActionCache
 
-			var err error
 			sar.cacheDir = fmt.Sprintf("%s/%s", sar.remoteAction.Org, sar.remoteAction.Repo)
-			repoURL := sar.remoteAction.URL + "/" + sar.cacheDir
-			repoRef := sar.remoteAction.Ref
-			sar.resolvedSha, err = cache.Fetch(ctx, sar.cacheDir, repoURL, repoRef, github.Token)
-			if err != nil {
-				return fmt.Errorf("failed to fetch \"%s\" version \"%s\": %w", repoURL, repoRef, err)
+			sha, downloaded := downloads[downloadKey]
+			if !downloaded {
+				var err error
+				repoURL := sar.remoteAction.URL + "/" + sar.cacheDir
+				repoRef := sar.remoteAction.Ref
+				if sha, err = cache.Fetch(ctx, sar.cacheDir, repoURL, repoRef, github.Token); err != nil {
+					return fmt.Errorf("failed to fetch \"%s\" version \"%s\": %w", repoURL, repoRef, err)
+				}
+				downloads[downloadKey] = sha
+				sar.downloaded = true
 			}
+			sar.resolvedSha = sha
 
 			remoteReader := func(ctx context.Context) actionYamlReader {
 				return func(filename string) (io.Reader, io.Closer, error) {
@@ -122,48 +132,53 @@ func (sar *stepActionRemote) prepareActionExecutor() common.Executor {
 		}
 
 		actionDir := sar.actionDir()
-		defaultActionURL := sar.RunContext.Config.DefaultActionURL()
-		// For Gitea
-		// A composite RunContext nils Config.Secrets, so getGitCloneToken would yield an
-		// empty token and clone the action anonymously (401 against the authenticated
-		// instance). github.Token survives the composite config copy and matches the
-		// top-level token; keep the shouldCloneURLUseToken host gate to avoid leaking it.
-		cloneURL := sar.remoteAction.CloneURL(defaultActionURL)
-		token := ""
-		if shouldCloneURLUseToken(sar.RunContext.Config.GitHubInstance, sar.RunContext.Config.trustedActionInstance(), cloneURL) {
-			token = github.Token
-		}
-		gitClone := stepActionRemoteNewCloneExecutor(git.NewGitCloneExecutorInput{
-			URL:         cloneURL,
-			Ref:         sar.remoteAction.Ref,
-			Dir:         actionDir,
-			Token:       token,
-			OfflineMode: sar.RunContext.Config.ActionOfflineMode,
-			Depth:       sar.RunContext.Config.ActionCloneDepth,
-			// printPrepareActions reports the download with its resolved commit.
-			Quiet: true,
-
-			InsecureSkipTLS: sar.cloneSkipTLS(), // For Gitea
-		})
 		var ntErr common.Executor
-		if err := gitClone(ctx); err != nil {
-			var refErr *git.Error
-			if errors.As(err, &refErr) && errors.Is(err, git.ErrShortRef) {
-				return fmt.Errorf("Unable to resolve action `%s`, the provided ref `%s` is the shortened version of a commit SHA, which is not supported. Please use the full commit SHA `%s` instead",
-					sar.Step.Uses, sar.remoteAction.Ref, refErr.Commit())
-			} else if errors.Is(err, gogit.ErrForceNeeded) { // TODO: figure out if it will be easy to shadow/alias go-git err's
-				ntErr = common.NewInfoExecutor("Non-terminating error while running 'git clone': %v", err)
-			} else {
-				return err
+		sha, downloaded := downloads[downloadKey]
+		if !downloaded {
+			// For Gitea
+			// A composite RunContext nils Config.Secrets, so getGitCloneToken would yield an
+			// empty token and clone the action anonymously (401 against the authenticated
+			// instance). github.Token survives the composite config copy and matches the
+			// top-level token; keep the shouldCloneURLUseToken host gate to avoid leaking it.
+			cloneURL := sar.remoteAction.CloneURL(sar.RunContext.Config.DefaultActionURL())
+			token := ""
+			if shouldCloneURLUseToken(sar.RunContext.Config.GitHubInstance, sar.RunContext.Config.trustedActionInstance(), cloneURL) {
+				token = github.Token
 			}
-		}
+			gitClone := stepActionRemoteNewCloneExecutor(git.NewGitCloneExecutorInput{
+				URL:         cloneURL,
+				Ref:         sar.remoteAction.Ref,
+				Dir:         actionDir,
+				Token:       token,
+				OfflineMode: sar.RunContext.Config.ActionOfflineMode,
+				Depth:       sar.RunContext.Config.ActionCloneDepth,
+				// printPrepareActions reports the download with its resolved commit.
+				Quiet: true,
 
-		// Best effort: the download report falls back to the ref alone when the commit is unknown.
-		if _, sha, err := git.FindGitRevision(ctx, actionDir); err != nil {
-			common.Logger(ctx).Debugf("unable to resolve the commit of %s: %v", sar.remoteAction.Reference(), err)
-		} else {
-			sar.resolvedSha = sha
+				InsecureSkipTLS: sar.cloneSkipTLS(), // For Gitea
+			})
+			if err := gitClone(ctx); err != nil {
+				var refErr *git.Error
+				if errors.As(err, &refErr) && errors.Is(err, git.ErrShortRef) {
+					return fmt.Errorf("Unable to resolve action `%s`, the provided ref `%s` is the shortened version of a commit SHA, which is not supported. Please use the full commit SHA `%s` instead",
+						sar.Step.Uses, sar.remoteAction.Ref, refErr.Commit())
+				} else if errors.Is(err, gogit.ErrForceNeeded) { // TODO: figure out if it will be easy to shadow/alias go-git err's
+					ntErr = common.NewInfoExecutor("Non-terminating error while running 'git clone': %v", err)
+				} else {
+					return err
+				}
+			}
+
+			// Best effort: the download report falls back to the ref alone when the commit is unknown.
+			if _, resolved, err := git.FindGitRevision(ctx, actionDir); err != nil {
+				common.Logger(ctx).Debugf("unable to resolve the commit of %s: %v", sar.remoteAction.Reference(), err)
+			} else {
+				sha = resolved
+			}
+			downloads[downloadKey] = sha
+			sar.downloaded = true
 		}
+		sar.resolvedSha = sha
 
 		remoteReader := func(ctx context.Context) actionYamlReader { //nolint:unparam // pre-existing issue from nektos/act
 			return func(filename string) (io.Reader, io.Closer, error) {
@@ -187,13 +202,14 @@ func (sar *stepActionRemote) prepareActionExecutor() common.Executor {
 	}
 }
 
-// actionDownloadInfo reports the action this step downloaded and the commit it resolved to. ok is
-// false when nothing was fetched, as for the local checkout of the workflow's own repository.
+// actionDownloadInfo reports the repository this step downloaded and the commit it resolved to. ok
+// is false when nothing was fetched, as for the local checkout of the workflow's own repository or
+// for an action another step of the job already downloaded.
 func (sar *stepActionRemote) actionDownloadInfo() (reference, sha string, ok bool) {
-	if sar.remoteAction == nil || sar.action == nil {
+	if sar.remoteAction == nil || sar.action == nil || !sar.downloaded {
 		return "", "", false
 	}
-	return sar.remoteAction.Reference(), sar.resolvedSha, true
+	return sar.remoteAction.RepoReference(), sar.resolvedSha, true
 }
 
 func (sar *stepActionRemote) pre() common.Executor {
@@ -234,21 +250,23 @@ func (sar *stepActionRemote) post() common.Executor {
 	return runStepExecutor(sar, stepStagePost, sar.revertToolkitOnFailure(runPostStep(sar))).If(hasPostStep(sar)).If(shouldRunPostStep(sar))
 }
 
-// toolkitBundles is the action directory and the entrypoints the toolkit may live in.
-func (sar *stepActionRemote) toolkitBundles() (string, []string) {
+// toolkitBundles is the repository's checkout, the action inside it, and the entrypoints the
+// toolkit may live in.
+func (sar *stepActionRemote) toolkitBundles() (dir, location string, scripts []string) {
 	if sar.remoteAction == nil {
-		return "", nil
+		return "", "", nil
 	}
-	dir := sar.actionDir()
-	return dir, actionScriptPaths(filepath.Join(dir, sar.remoteAction.Path), sar.action)
+	dir = sar.actionDir()
+	location = filepath.Join(dir, sar.remoteAction.Path)
+	return dir, location, actionScriptPaths(location, sar.action)
 }
 
 // patchActionToolkit edits the bundled toolkit so it works against Gitea: the artifact actions
 // stop refusing, and the cache client keeps to the cache server whichever API version it picks.
 func (sar *stepActionRemote) patchActionToolkit(ctx context.Context) error {
 	if sar.RunContext.Config.PatchToolkit {
-		dir, scripts := sar.toolkitBundles()
-		patchToolkit(ctx, dir, scripts)
+		dir, location, scripts := sar.toolkitBundles()
+		patchToolkit(ctx, dir, location, scripts)
 	}
 	return nil
 }
@@ -259,20 +277,21 @@ func (sar *stepActionRemote) revertToolkitOnFailure(exec common.Executor) common
 	return func(ctx context.Context) error {
 		err := exec(ctx)
 		if err != nil {
-			dir, scripts := sar.toolkitBundles()
-			revertToolkit(ctx, dir, scripts)
+			dir, location, scripts := sar.toolkitBundles()
+			revertToolkit(ctx, dir, location, scripts)
 		}
 		return err
 	}
 }
 
+// downloadKey is the clone URL and ref a step downloads, shared by every action path inside that
+// repository, and distinct per instance serving it.
+func (sar *stepActionRemote) downloadKey() string {
+	return sar.remoteAction.CloneURL(sar.RunContext.Config.DefaultActionURL()) + "@" + sar.remoteAction.Ref
+}
+
 func (sar *stepActionRemote) actionDir() string {
-	uses := sar.Step.Uses
-	if strings.HasPrefix(uses, selfRepoPrefix) {
-		// The same `$/x` names a different action per enclosing repo, so key the cache on what it resolved to.
-		uses = sar.remoteAction.URL + "/" + sar.remoteAction.Reference()
-	}
-	return fmt.Sprintf("%s/%s", sar.RunContext.ActionCacheDir(), model.UsesHash(uses))
+	return fmt.Sprintf("%s/%s", sar.RunContext.ActionCacheDir(), model.UsesHash(sar.downloadKey()))
 }
 
 func (sar *stepActionRemote) getRunContext() *RunContext {
@@ -388,11 +407,16 @@ func (ra *remoteAction) CloneURL(u string) string {
 // Reference renders the action as {org}/{repo}[/path]@{ref}, omitting the download source, which
 // can be interpolated from a secret.
 func (ra *remoteAction) Reference() string {
-	repo := fmt.Sprintf("%s/%s", ra.Org, ra.Repo)
-	if ra.Path != "" {
-		repo = fmt.Sprintf("%s/%s", repo, ra.Path)
+	if ra.Path == "" {
+		return ra.RepoReference()
 	}
-	return fmt.Sprintf("%s@%s", repo, ra.Ref)
+	return fmt.Sprintf("%s/%s/%s@%s", ra.Org, ra.Repo, ra.Path, ra.Ref)
+}
+
+// RepoReference renders the downloaded repository as {org}/{repo}@{ref}, the unit actions/runner
+// downloads and reports, which carries no path inside the repository.
+func (ra *remoteAction) RepoReference() string {
+	return fmt.Sprintf("%s/%s@%s", ra.Org, ra.Repo, ra.Ref)
 }
 
 func (ra *remoteAction) IsCheckout() bool {

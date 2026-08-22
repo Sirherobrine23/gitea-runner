@@ -41,6 +41,13 @@ func (sarm *stepActionRemoteMocks) runAction(step actionStep, actionDir string, 
 	return args.Get(0).(func(context.Context) error)
 }
 
+// actionDirMatcher matches the cache directory the step clones into, known once it resolved its `uses:`.
+func actionDirMatcher(sar *stepActionRemote) any {
+	return mock.MatchedBy(func(actionDir string) bool {
+		return actionDir == sar.actionDir()
+	})
+}
+
 func TestStepActionRemote(t *testing.T) {
 	table := []struct {
 		name      string
@@ -170,17 +177,11 @@ func TestStepActionRemote(t *testing.T) {
 			}
 			sar.RunContext.ExprEval = sar.RunContext.NewExpressionEvaluator(ctx)
 
-			suffixMatcher := func(suffix string) any {
-				return mock.MatchedBy(func(actionDir string) bool {
-					return strings.HasSuffix(actionDir, suffix)
-				})
-			}
-
 			if tt.mocks.read {
-				sarm.On("readAction", sar.Step, suffixMatcher(sar.Step.UsesHash()), "", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
+				sarm.On("readAction", sar.Step, actionDirMatcher(sar), "", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
 			}
 			if tt.mocks.run {
-				sarm.On("runAction", sar, suffixMatcher(sar.Step.UsesHash()), newRemoteAction(sar.Step.Uses)).Return(func(ctx context.Context) error { return tt.runError })
+				sarm.On("runAction", sar, actionDirMatcher(sar), newRemoteAction(sar.Step.Uses)).Return(func(ctx context.Context) error { return tt.runError })
 
 				cm.On("Copy", "/var/run/act", mock.AnythingOfType("[]*container.FileEntry")).Return(func(ctx context.Context) error {
 					return nil
@@ -266,13 +267,7 @@ func TestStepActionRemotePre(t *testing.T) {
 				readAction: sarm.readAction,
 			}
 
-			suffixMatcher := func(suffix string) any {
-				return mock.MatchedBy(func(actionDir string) bool {
-					return strings.HasSuffix(actionDir, suffix)
-				})
-			}
-
-			sarm.On("readAction", sar.Step, suffixMatcher(sar.Step.UsesHash()), "path", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
+			sarm.On("readAction", sar.Step, actionDirMatcher(sar), "path", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
 
 			err := sar.pre()(ctx)
 
@@ -282,6 +277,58 @@ func TestStepActionRemotePre(t *testing.T) {
 			sarm.AssertExpectations(t)
 		})
 	}
+}
+
+func TestStepActionRemotePrepareDownloadsRepositoryOncePerJob(t *testing.T) {
+	ctx := context.Background()
+	sarm := &stepActionRemoteMocks{}
+	cloned := 0
+
+	origNewCloneExecutor := stepActionRemoteNewCloneExecutor
+	stepActionRemoteNewCloneExecutor = func(git.NewGitCloneExecutorInput) common.Executor {
+		return func(context.Context) error {
+			cloned++
+			return nil
+		}
+	}
+	defer func() {
+		stepActionRemoteNewCloneExecutor = origNewCloneExecutor
+	}()
+
+	rc := newTestRC(&model.Workflow{Jobs: map[string]*model.Job{"job1": {}}}, nil)
+	rc.Config.ActionCacheDir = t.TempDir()
+	rc.ExprEval = rc.NewExpressionEvaluator(ctx)
+
+	rootAction := &model.Action{Name: "root"}
+	subAction := &model.Action{Name: "sub"}
+	sarm.On("readAction", mock.Anything, mock.Anything, "", mock.Anything, mock.Anything).Return(rootAction, nil).Times(3)
+	sarm.On("readAction", mock.Anything, mock.Anything, "sub", mock.Anything, mock.Anything).Return(subAction, nil).Once()
+
+	steps := make([]*stepActionRemote, 0, 4)
+	for _, uses := range []string{"org/repo@v1", "org/repo@v1", "org/repo/sub@v1", "org/repo@v2"} {
+		sar := &stepActionRemote{
+			Step:       &model.Step{Uses: uses},
+			RunContext: rc,
+			readAction: sarm.readAction,
+		}
+		require.NoError(t, sar.prepareActionExecutor()(ctx))
+		steps = append(steps, sar)
+	}
+
+	assert.Equal(t, 2, cloned) // one per ref, shared by both paths of v1
+	assert.Same(t, rootAction, steps[1].action)
+	assert.Same(t, subAction, steps[2].action)
+	sarm.AssertExpectations(t)
+
+	reference, _, ok := steps[0].actionDownloadInfo()
+	assert.True(t, ok)
+	assert.Equal(t, "org/repo@v1", reference)
+	for _, reusing := range steps[1:3] {
+		_, _, ok := reusing.actionDownloadInfo()
+		assert.False(t, ok)
+	}
+	_, _, ok = steps[3].actionDownloadInfo()
+	assert.True(t, ok)
 }
 
 func TestStepActionRemotePreThroughAction(t *testing.T) {
@@ -337,13 +384,7 @@ func TestStepActionRemotePreThroughAction(t *testing.T) {
 				readAction: sarm.readAction,
 			}
 
-			suffixMatcher := func(suffix string) any {
-				return mock.MatchedBy(func(actionDir string) bool {
-					return strings.HasSuffix(actionDir, suffix)
-				})
-			}
-
-			sarm.On("readAction", sar.Step, suffixMatcher(sar.Step.UsesHash()), "path", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
+			sarm.On("readAction", sar.Step, actionDirMatcher(sar), "path", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
 
 			err := sar.pre()(ctx)
 
@@ -413,13 +454,7 @@ func TestStepActionRemotePreThroughActionToken(t *testing.T) {
 				readAction: sarm.readAction,
 			}
 
-			suffixMatcher := func(suffix string) any {
-				return mock.MatchedBy(func(actionDir string) bool {
-					return strings.HasSuffix(actionDir, suffix)
-				})
-			}
-
-			sarm.On("readAction", sar.Step, suffixMatcher(sar.Step.UsesHash()), "path", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
+			sarm.On("readAction", sar.Step, actionDirMatcher(sar), "path", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
 
 			err := sar.pre()(ctx)
 
@@ -476,13 +511,7 @@ func TestStepActionRemoteUsesGitHubInstanceWhenDefaultActionInstanceEmpty(t *tes
 		},
 		readAction: sarm.readAction,
 	}
-
-	suffixMatcher := func(suffix string) any {
-		return mock.MatchedBy(func(actionDir string) bool {
-			return strings.HasSuffix(actionDir, suffix)
-		})
-	}
-	sarm.On("readAction", sar.Step, suffixMatcher(sar.Step.UsesHash()), "", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
+	sarm.On("readAction", sar.Step, actionDirMatcher(sar), "", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
 
 	require.NoError(t, sar.prepareActionExecutor()(ctx))
 	assert.Equal(t, "https://gitea.example/actions/setup-go", actualURL)
@@ -962,6 +991,7 @@ func TestStepActionRemoteActionDownloadInfo(t *testing.T) {
 			remoteAction: newRemoteAction("actions/checkout@v7"),
 			action:       &model.Action{},
 			resolvedSha:  "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+			downloaded:   true,
 		}
 
 		reference, sha, ok := sar.actionDownloadInfo()
@@ -1065,13 +1095,7 @@ func TestStepActionRemoteCloneTokenSurvivesNilSecrets(t *testing.T) {
 				readAction: sarm.readAction,
 			}
 			sar.RunContext.ExprEval = sar.RunContext.NewExpressionEvaluator(ctx)
-
-			suffixMatcher := func(suffix string) any {
-				return mock.MatchedBy(func(actionDir string) bool {
-					return strings.HasSuffix(actionDir, suffix)
-				})
-			}
-			sarm.On("readAction", sar.Step, suffixMatcher(sar.Step.UsesHash()), "", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
+			sarm.On("readAction", sar.Step, actionDirMatcher(sar), "", mock.Anything, mock.Anything).Return(&model.Action{}, nil)
 
 			err := sar.prepareActionExecutor()(ctx)
 			require.NoError(t, err)

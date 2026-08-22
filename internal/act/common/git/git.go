@@ -458,10 +458,14 @@ func NewGitCloneExecutor(input NewGitCloneExecutorInput) common.Executor {
 				logger.Debugf("Unable to pull %s: %v", refName, err)
 			}
 		case isOfflineMode && reused:
-			reusedMsg = " (reused in offline mode)"
+			reusedMsg = " (offline mode)"
 		}
 
-		logger.Debugf("Cloned %s to %s%s", input.URL, input.Dir, reusedMsg)
+		if reused {
+			logger.Debugf("Reused %s at %s%s", input.URL, input.Dir, reusedMsg)
+		} else {
+			logger.Debugf("Cloned %s to %s", input.URL, input.Dir)
+		}
 
 		if hash.String() != input.Ref && refType == "branch" {
 			logger.Debugf("Provided ref is not a sha. Updating branch ref after pull")

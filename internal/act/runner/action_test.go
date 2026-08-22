@@ -496,11 +496,11 @@ func TestExecAsDockerHoldsCloneLockForRemoteUncached(t *testing.T) {
 }
 
 func TestDockerActionImageTag(t *testing.T) {
-	// Remote actions already carry a unique, ref-scoped actionName (the uses
-	// hash), so the tag must be left untouched for backwards compatibility.
-	assert.Equal(t,
-		"act-abc123-dockeraction:latest",
-		dockerActionImageTag("owner/repo", "abc123", false),
+	// A remote action's actionName is the checkout of its repository and ref plus its path inside it,
+	// and paths that sanitize alike share the readable prefix, so siblings must stay apart.
+	assert.NotEqual(t,
+		dockerActionImageTag("owner/repo", "abc123/a-b", false),
+		dockerActionImageTag("owner/repo", "abc123/a_b", false),
 	)
 
 	// Local actions keep a human-readable, repository-namespaced prefix and gain a short hash suffix that makes the tag unique per (repository, actionName).

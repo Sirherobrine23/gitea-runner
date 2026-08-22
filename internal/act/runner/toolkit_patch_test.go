@@ -234,18 +234,18 @@ func TestRevertToolkit(t *testing.T) {
 	dir, script := bundleFile(t, gateTSC)
 	scripts := []string{script}
 
-	patchToolkit(t.Context(), dir, scripts)
+	patchToolkit(t.Context(), dir, dir, scripts)
 	body, err := os.ReadFile(script)
 	require.NoError(t, err)
 	require.True(t, gateOpened(string(body)), "precondition: the bundle is patched")
 
-	revertToolkit(t.Context(), dir, scripts)
+	revertToolkit(t.Context(), dir, dir, scripts)
 	body, err = os.ReadFile(script)
 	require.NoError(t, err)
 	assert.Equal(t, gateTSC, string(body), "the original bundle is back")
 
 	// The skip marker survives, so the action stays unpatched from now on.
-	patchToolkit(t.Context(), dir, scripts)
+	patchToolkit(t.Context(), dir, dir, scripts)
 	body, err = os.ReadFile(script)
 	require.NoError(t, err)
 	assert.Equal(t, gateTSC, string(body), "a reverted action stays unpatched")
@@ -258,11 +258,11 @@ func TestPatchBundleAfterTheActionMoved(t *testing.T) {
 	original := originalFor(dir, script)
 	scripts := []string{script}
 
-	patchToolkit(t.Context(), dir, scripts)
+	patchToolkit(t.Context(), dir, dir, scripts)
 	require.NoError(t, os.WriteFile(script, []byte(gateWebpack), 0o600)) // the new version lands
 
 	// Reverting must not roll the action back to the version the original came from.
-	revertToolkit(t.Context(), dir, scripts)
+	revertToolkit(t.Context(), dir, dir, scripts)
 	body, err := os.ReadFile(script)
 	require.NoError(t, err)
 	assert.Equal(t, gateWebpack, string(body))
@@ -282,25 +282,25 @@ func TestPatchBundleAfterTheActionMoved(t *testing.T) {
 // The wiring: a step patches its own bundles only when the runner serves the v2 API, and a step
 // that fails gets them back. The action's path inside its repository is part of where they live.
 func TestStepActionRemoteToolkitPatch(t *testing.T) {
-	newStep := func(t *testing.T, patch bool) (*stepActionRemote, string) {
+	newStep := func(t *testing.T, cacheDir, actionPath string, patch bool) (*stepActionRemote, string) {
 		t.Helper()
 
 		sar := &stepActionRemote{
-			Step:         &model.Step{Uses: "owner/repo/sub@v1"},
-			remoteAction: &remoteAction{Org: "owner", Repo: "repo", Path: "sub", Ref: "v1"},
+			Step:         &model.Step{Uses: "owner/repo/" + actionPath + "@v1"},
+			remoteAction: &remoteAction{Org: "owner", Repo: "repo", Path: actionPath, Ref: "v1"},
 			action:       &model.Action{Runs: model.ActionRuns{Using: "node20", Main: "index.js"}},
 			RunContext: &RunContext{
-				Config: &Config{ActionCacheDir: t.TempDir(), PatchToolkit: patch},
+				Config: &Config{ActionCacheDir: cacheDir, PatchToolkit: patch},
 			},
 		}
-		script := filepath.Join(sar.actionDir(), "sub", "index.js")
+		script := filepath.Join(sar.actionDir(), actionPath, "index.js")
 		require.NoError(t, os.MkdirAll(filepath.Dir(script), 0o755))
 		require.NoError(t, os.WriteFile(script, []byte(gateTSC), 0o600))
 		return sar, script
 	}
 
 	t.Run("left alone when the runner does not patch", func(t *testing.T) {
-		sar, script := newStep(t, false)
+		sar, script := newStep(t, t.TempDir(), "sub", false)
 		require.NoError(t, sar.patchActionToolkit(t.Context()))
 
 		body, err := os.ReadFile(script)
@@ -309,7 +309,8 @@ func TestStepActionRemoteToolkitPatch(t *testing.T) {
 	})
 
 	t.Run("patched, and put back when the step fails", func(t *testing.T) {
-		sar, script := newStep(t, true)
+		cacheDir := t.TempDir()
+		sar, script := newStep(t, cacheDir, "sub", true)
 		require.NoError(t, sar.patchActionToolkit(t.Context()))
 
 		body, err := os.ReadFile(script)
@@ -322,5 +323,13 @@ func TestStepActionRemoteToolkitPatch(t *testing.T) {
 		body, err = os.ReadFile(script)
 		require.NoError(t, err)
 		assert.Equal(t, gateTSC, string(body))
+
+		// A sibling action shares the repository's checkout, and must not be marked off with it.
+		sibling, siblingScript := newStep(t, cacheDir, "other", true)
+		require.NoError(t, sibling.patchActionToolkit(t.Context()))
+
+		body, err = os.ReadFile(siblingScript)
+		require.NoError(t, err)
+		assert.True(t, gateOpened(string(body)))
 	})
 }

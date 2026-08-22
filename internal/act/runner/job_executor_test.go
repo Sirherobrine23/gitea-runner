@@ -146,7 +146,8 @@ func TestPrintPrepareActionsGolden(t *testing.T) {
 		&actionPreparerMock{reference: "actions/checkout@v7", sha: "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0", ok: true},
 		// A resolved commit is best effort; the ref alone is reported when it is unknown.
 		&actionPreparerMock{reference: "actions/setup-go@v6", ok: true},
-		// A step that downloads nothing, such as the checkout of the workflow's own repository.
+		// A step that downloads nothing, such as the checkout of the workflow's own repository or a
+		// second step on an action the job already downloaded.
 		&actionPreparerMock{ok: false},
 	}
 	require.NoError(t, printPrepareActions(&RunContext{}, preparers)(ctx))

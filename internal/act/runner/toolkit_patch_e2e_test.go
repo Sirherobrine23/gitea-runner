@@ -118,7 +118,7 @@ func patchedAction(t *testing.T, repo, ref, entrypoint string) string {
 	dir := tempDirPath(t)
 	script := filepath.Join(dir, filepath.Base(entrypoint))
 	require.NoError(t, os.WriteFile(script, body, 0o600))
-	patchToolkit(t.Context(), dir, []string{script})
+	patchToolkit(t.Context(), dir, dir, []string{script})
 	return script
 }
 
