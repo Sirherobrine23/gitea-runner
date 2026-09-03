@@ -51,7 +51,11 @@ func (sar *stepActionRemote) prepareActionExecutor() common.Executor {
 		// Since actions can specify the download source via a url prefix.
 		// The prefix may contain some sensitive information that needs to be stored in secrets,
 		// so we need to interpolate the expression value for uses first.
-		sar.Step.Uses = sar.RunContext.NewExpressionEvaluator(ctx).Interpolate(ctx, sar.Step.Uses)
+		uses, err := sar.RunContext.NewExpressionEvaluator(ctx).Interpolate(ctx, sar.Step.Uses)
+		if err != nil {
+			return fmt.Errorf("unable to interpolate uses: %w", err)
+		}
+		sar.Step.Uses = uses
 
 		github := sar.getGithubContext(ctx) // read before remoteAction is set, so `$/` resolves against the enclosing action
 		if strings.HasPrefix(sar.Step.Uses, selfRepoPrefix) {
@@ -160,8 +164,11 @@ func (sar *stepActionRemote) main() common.Executor {
 					common.Logger(ctx).Debugf("Skipping local actions/checkout because you bound your workspace")
 					return nil
 				}
-				eval := sar.RunContext.NewExpressionEvaluator(ctx)
-				copyToPath := path.Join(sar.RunContext.JobContainer.ToContainerPath(sar.RunContext.Config.Workdir), eval.Interpolate(ctx, sar.Step.With["path"]))
+				checkoutPath, err := sar.RunContext.NewExpressionEvaluator(ctx).Interpolate(ctx, sar.Step.With["path"])
+				if err != nil {
+					return fmt.Errorf("unable to interpolate with.path: %w", err)
+				}
+				copyToPath := path.Join(sar.RunContext.JobContainer.ToContainerPath(sar.RunContext.Config.Workdir), checkoutPath)
 				return sar.RunContext.JobContainer.CopyDir(copyToPath, sar.RunContext.Config.Workdir+string(filepath.Separator)+".", sar.RunContext.Config.UseGitIgnore)(ctx)
 			}
 
@@ -229,14 +236,18 @@ func (sar *stepActionRemote) getActionModel() *model.Action {
 	return sar.action
 }
 
-func (sar *stepActionRemote) getCompositeRunContext(ctx context.Context) *RunContext {
+func (sar *stepActionRemote) getCompositeRunContext(ctx context.Context) (*RunContext, error) {
 	if sar.compositeRunContext == nil {
 		actionDir := sar.actionDir()
 		actionLocation := path.Join(actionDir, sar.remoteAction.Path)
 		_, containerActionDir := getContainerActionPaths(sar.getStepModel(), actionLocation, sar.RunContext)
 
-		sar.compositeRunContext = newCompositeRunContext(ctx, sar.RunContext, sar, containerActionDir)
-		sar.compositeSteps = sar.compositeRunContext.compositeExecutor(sar.action)
+		compositeRunContext, err := newCompositeRunContext(ctx, sar.RunContext, sar, containerActionDir)
+		if err != nil {
+			return nil, err
+		}
+		sar.compositeRunContext = compositeRunContext
+		sar.compositeSteps = compositeRunContext.compositeExecutor(sar.action)
 	} else {
 		// Re-evaluate environment here. For remote actions the environment
 		// need to be re-created for every stage (pre, main, post) as there
@@ -244,11 +255,14 @@ func (sar *stepActionRemote) getCompositeRunContext(ctx context.Context) *RunCon
 		// stages are executed. (e.g. the output of another action is the
 		// input for this action during the main stage, but the env
 		// was already created during the pre stage)
-		env := evaluateCompositeInputAndEnv(ctx, sar.RunContext, sar)
+		env, err := evaluateCompositeInputAndEnv(ctx, sar.RunContext, sar)
+		if err != nil {
+			return nil, err
+		}
 		sar.compositeRunContext.setCompositeActionEnv(env)
 		sar.compositeRunContext.ExtraPath = sar.RunContext.ExtraPath
 	}
-	return sar.compositeRunContext
+	return sar.compositeRunContext, nil
 }
 
 func (sar *stepActionRemote) getCompositeSteps() *compositeSteps {

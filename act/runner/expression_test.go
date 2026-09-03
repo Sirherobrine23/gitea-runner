@@ -266,18 +266,20 @@ func TestInterpolate(t *testing.T) {
 		{"${{ null }}", ""},
 		{"${{ fromJSON('[1,2]') }}", "Array"},
 		{"${{ fromJSON('{\"a\":1}') }}", "Object"},
-		// a malformed part must not restructure its neighbours, and it interpolates to nothing
-		{"${{ 1) && (2 }}", ""},
-		{"run ${{ 1) && (2 }} now", ""},
 		{"${{ 1", "${{ 1"},
 	}
 
 	for _, table := range tables {
 		t.Run("interpolate", func(t *testing.T) {
-			assertObject := assert.New(t)
-			out := ee.Interpolate(context.Background(), table.in)
-			assertObject.Equal(table.out, out, table.in)
+			out, err := ee.Interpolate(context.Background(), table.in)
+			require.NoError(t, err, table.in)
+			assert.Equal(t, table.out, out, table.in)
 		})
+	}
+
+	for _, in := range []string{"${{ 1) && (2 }}", "run ${{ 1) && (2 }} now"} {
+		_, err := ee.Interpolate(context.Background(), in)
+		assert.Error(t, err, in)
 	}
 }
 
@@ -352,7 +354,7 @@ on:
 				}
 				ghc := &model.GithubContext{EventName: eventName, Event: table.event}
 
-				inputs := getEvaluatorInputs(context.Background(), rc, nil, ghc)
+				inputs := getEvaluatorInputs(rc, nil, ghc)
 				assert.Equal(t, table.flag, inputs["flag"])
 				assert.Equal(t, "gitea", inputs["name"])
 			})
@@ -372,7 +374,8 @@ jobs:
 
 	runner := &runnerImpl{config: &Config{Secrets: map[string]string{"A": "s3cr3t-a", "B": "s3cr3t-b"}}}
 	containerName := func(jobID string) string {
-		rc := runner.newRunContext(t.Context(), &model.Run{JobID: jobID, Workflow: workflow}, nil)
+		rc, err := runner.newRunContext(t.Context(), &model.Run{JobID: jobID, Workflow: workflow}, nil)
+		require.NoError(t, err)
 		assert.NotContains(t, rc.Name, "s3cr3t")
 		return rc.jobContainerName()
 	}

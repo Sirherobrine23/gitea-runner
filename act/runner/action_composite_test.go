@@ -19,25 +19,30 @@ func TestCompositeActionParity(t *testing.T) {
 		ctx := t.Context()
 		strategy := &model.Strategy{MaxParallel: 3}
 		parent := &RunContext{
-			Config:       &Config{},
-			Matrix:       map[string]any{"os": "linux"},
-			Run:          &model.Run{JobID: "job", Workflow: &model.Workflow{Name: "workflow", Jobs: map[string]*model.Job{"job": {Strategy: strategy}}}},
-			JobContainer: &jobContainerMock{},
+			Config:        &Config{},
+			Matrix:        map[string]any{"os": "linux"},
+			Run:           &model.Run{JobID: "job", Workflow: &model.Workflow{Name: "workflow", Jobs: map[string]*model.Job{"job": {Strategy: strategy}}}},
+			JobContainer:  &jobContainerMock{},
+			platformImage: "-self-hosted",
 		}
-		composite := newCompositeRunContext(ctx, parent, &stepActionRemote{
+		composite, err := newCompositeRunContext(ctx, parent, &stepActionRemote{
 			Step:       &model.Step{With: map[string]string{"SHARED": "outer"}},
 			RunContext: parent,
 			action:     &model.Action{Inputs: map[string]model.Input{"shared": {Default: "outer-default"}}},
 			env:        map[string]string{"INPUT_SHARED": "outer"},
 		}, "/action")
+		require.NoError(t, err)
 
 		assert.Same(t, strategy, composite.Run.Job().Strategy)
-		assert.Equal(t, "linux|3|outer", composite.NewExpressionEvaluator(ctx).Interpolate(ctx,
-			"${{ matrix.os }}|${{ strategy.max-parallel }}|${{ inputs.shared }}"))
+		assert.True(t, composite.IsHostEnv())
+		interpolated, err := composite.NewExpressionEvaluator(ctx).Interpolate(ctx,
+			"${{ matrix.os }}|${{ strategy.max-parallel }}|${{ inputs.shared }}")
+		require.NoError(t, err)
+		assert.Equal(t, "linux|3|outer", interpolated)
 		assert.NotContains(t, composite.Env, "INPUT_SHARED")
 
 		nestedEnv := composite.GetEnv()
-		populateEnvsFromInput(ctx, &nestedEnv, &model.Action{Inputs: map[string]model.Input{"shared": {Default: "inner-default"}}}, composite)
+		require.NoError(t, populateEnvsFromInput(ctx, &nestedEnv, &model.Action{Inputs: map[string]model.Input{"shared": {Default: "inner-default"}}}, composite))
 		assert.Equal(t, "inner-default", nestedEnv["INPUT_SHARED"])
 	})
 

@@ -198,7 +198,10 @@ func (runner *runnerImpl) NewPlanExecutor(plan *model.Plan) common.Executor {
 					log.Debugf("Job.Strategy.MaxParallelString: %v", job.Strategy.MaxParallelString)
 					log.Debugf("Job.Strategy.RawMatrix: %v", job.Strategy.RawMatrix)
 
-					strategyRc := runner.newRunContext(ctx, run, nil)
+					strategyRc, err := runner.newRunContext(ctx, run, nil)
+					if err != nil {
+						return err
+					}
 					// Resolve template expressions in the matrix node before Matrix() is called.
 					// On failure the literal string is kept and normalizeMatrixValue wraps it as a fallback.
 					if err := strategyRc.NewExpressionEvaluator(ctx).EvaluateYamlNode(ctx, &job.Strategy.RawMatrix); err != nil {
@@ -230,7 +233,10 @@ func (runner *runnerImpl) NewPlanExecutor(plan *model.Plan) common.Executor {
 				log.Infof("Running job with maxParallel=%d for %d matrix combinations", maxParallel, len(matrixes))
 
 				for i, matrix := range matrixes {
-					rc := runner.newRunContext(ctx, run, matrix)
+					rc, err := runner.newRunContext(ctx, run, matrix)
+					if err != nil {
+						return err
+					}
 					rc.JobName = rc.Name
 					if len(matrixes) > 1 {
 						rc.Name = fmt.Sprintf("%s-%d", rc.Name, i+1)
@@ -315,7 +321,7 @@ func handleFailure(plan *model.Plan) common.Executor {
 	}
 }
 
-func (runner *runnerImpl) newRunContext(ctx context.Context, run *model.Run, matrix map[string]any) *RunContext {
+func (runner *runnerImpl) newRunContext(ctx context.Context, run *model.Run, matrix map[string]any) (*RunContext, error) {
 	rc := &RunContext{
 		Config:      runner.config,
 		Run:         run,
@@ -324,15 +330,18 @@ func (runner *runnerImpl) newRunContext(ctx context.Context, run *model.Run, mat
 		Matrix:      matrix,
 		caller:      runner.caller,
 	}
+	if err := rc.resolveWorkflowCall(ctx); err != nil {
+		return nil, err
+	}
 	rc.ExprEval = rc.NewExpressionEvaluator(ctx)
-	rc.Name = rc.maskSecrets(rc.ExprEval.Interpolate(ctx, run.String()))
+	rc.Name = rc.maskSecrets(rc.ExprEval.InterpolateName(ctx, run.String()))
 	// Snapshot the job's pristine output expressions now, before any matrix combo runs and
 	// rewrites the shared Job.Outputs (see interpolateOutputs).
 	if job := run.Job(); job != nil {
 		rc.outputTemplate = maps.Clone(job.Outputs)
 	}
 
-	return rc
+	return rc, nil
 }
 
 // For Gitea

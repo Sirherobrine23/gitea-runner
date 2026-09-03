@@ -6,6 +6,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"gitea.com/gitea/runner/act/common"
@@ -58,17 +59,28 @@ func (sd *stepDocker) runUsesContainer() common.Executor {
 	return func(ctx context.Context) error {
 		image := strings.TrimPrefix(step.Uses, "docker://")
 		eval := rc.NewExpressionEvaluator(ctx)
-		cmd, err := shellquote.Split(eval.Interpolate(ctx, step.With["args"]))
+		args, err := eval.Interpolate(ctx, step.With["args"])
+		if err != nil {
+			return fmt.Errorf("unable to interpolate with.args: %w", err)
+		}
+		cmd, err := shellquote.Split(args)
 		if err != nil {
 			return err
 		}
 
 		var entrypoint []string
-		if entry := eval.Interpolate(ctx, step.With["entrypoint"]); entry != "" {
+		entry, err := eval.Interpolate(ctx, step.With["entrypoint"])
+		if err != nil {
+			return fmt.Errorf("unable to interpolate with.entrypoint: %w", err)
+		}
+		if entry != "" {
 			entrypoint = []string{entry}
 		}
 
-		stepContainer := newStepContainer(ctx, sd, image, cmd, entrypoint, "")
+		stepContainer, err := newStepContainer(ctx, sd, image, cmd, entrypoint, "")
+		if err != nil {
+			return err
+		}
 
 		return common.NewPipelineExecutor(
 			stepContainer.Pull(rc.Config.ForcePull),

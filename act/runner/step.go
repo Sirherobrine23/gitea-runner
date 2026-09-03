@@ -11,6 +11,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gitea.com/gitea/runner/act/common"
@@ -82,9 +83,11 @@ func runStepExecutor(step step, stage stepStage, executor common.Executor) commo
 			rc.StepResults[rc.CurrentStep] = stepResult
 		}
 
-		setupEnv(ctx, step)
-
-		runStep, err := isStepEnabled(ctx, ifExpression, step, stage)
+		err := setupEnv(ctx, step)
+		var runStep bool
+		if err == nil {
+			runStep, err = isStepEnabled(ctx, ifExpression, step, stage)
+		}
 		if err != nil {
 			stepResult.Conclusion = model.StepStatusFailure
 			stepResult.Outcome = model.StepStatusFailure
@@ -99,7 +102,7 @@ func runStepExecutor(step step, stage stepStage, executor common.Executor) commo
 			return nil
 		}
 
-		stepString := rc.ExprEval.Interpolate(ctx, stepModel.String())
+		stepString := rc.ExprEval.InterpolateName(ctx, stepModel.String())
 		if strings.Contains(stepString, "::add-mask::") {
 			stepString = "add-mask command"
 		}
@@ -221,8 +224,10 @@ func runStepExecutor(step step, stage stepStage, executor common.Executor) commo
 }
 
 func evaluateStepTimeout(ctx context.Context, exprEval *expressionEvaluator, stepModel *model.Step) (context.Context, context.CancelFunc) {
-	timeout := exprEval.Interpolate(ctx, stepModel.TimeoutMinutes)
-	if timeout != "" {
+	timeout, err := exprEval.Interpolate(ctx, stepModel.TimeoutMinutes)
+	if err != nil {
+		common.Logger(ctx).Errorf("An error occurred when attempting to determine the step timeout: %s", err)
+	} else if timeout != "" {
 		if timeOutMinutes, err := strconv.ParseInt(timeout, 10, 64); err == nil && timeOutMinutes > 0 {
 			return context.WithTimeout(ctx, time.Duration(timeOutMinutes)*time.Minute)
 		}
@@ -230,27 +235,33 @@ func evaluateStepTimeout(ctx context.Context, exprEval *expressionEvaluator, ste
 	return ctx, func() {}
 }
 
-func setupEnv(ctx context.Context, step step) {
+func setupEnv(ctx context.Context, step step) error {
 	rc := step.getRunContext()
 
 	mergeEnv(ctx, step)
 	// merge step env last, since it should not be overwritten
 	mergeIntoMap(step, step.getEnv(), step.getStepModel().GetEnv())
 
+	var err error
 	exprEval := rc.NewExpressionEvaluator(ctx)
 	for k, v := range *step.getEnv() {
 		if !strings.HasPrefix(k, "INPUT_") {
-			(*step.getEnv())[k] = exprEval.Interpolate(ctx, v)
+			if (*step.getEnv())[k], err = exprEval.Interpolate(ctx, v); err != nil {
+				return fmt.Errorf("unable to interpolate env %s: %w", k, err)
+			}
 		}
 	}
 	// after we have an evaluated step context, update the expressions evaluator with a new env context
 	// you can use step level env in the with property of a uses construct
-	exprEval = rc.NewExpressionEvaluatorWithEnv(ctx, *step.getEnv())
+	inputEval := sync.OnceValue(func() *expressionEvaluator { return rc.NewExpressionEvaluatorWithEnv(ctx, *step.getEnv()) })
 	for k, v := range *step.getEnv() {
 		if strings.HasPrefix(k, "INPUT_") {
-			(*step.getEnv())[k] = exprEval.Interpolate(ctx, v)
+			if (*step.getEnv())[k], err = inputEval().Interpolate(ctx, v); err != nil {
+				return fmt.Errorf("unable to interpolate env %s: %w", k, err)
+			}
 		}
 	}
+	return nil
 }
 
 func mergeEnv(ctx context.Context, step step) {

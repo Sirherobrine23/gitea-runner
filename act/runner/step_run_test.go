@@ -6,6 +6,7 @@ package runner
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"io"
 	"os"
@@ -42,17 +43,12 @@ func TestStepRun(t *testing.T) {
 				JobID: "1",
 				Workflow: &model.Workflow{
 					Jobs: map[string]*model.Job{
-						"1": {
-							Defaults: model.Defaults{
-								Run: model.RunDefaults{
-									Shell: "bash",
-								},
-							},
-						},
+						"1": {},
 					},
 				},
 			},
-			JobContainer: cm,
+			JobContainer:   cm,
+			jobRunDefaults: model.RunDefaults{Shell: "bash"},
 		},
 		Step: &model.Step{
 			ID:               "1",
@@ -84,13 +80,13 @@ func TestStepRun(t *testing.T) {
 
 func TestStepRunShellParity(t *testing.T) {
 	tests := []struct {
-		name, shell, workingDir string
-		env                     map[string]string
-		host                    bool
-		probeErr                error
-		wantExt                 string
-		wantCmd                 []string
-		wantErr                 string
+		name, run, shell, workingDir string
+		env                          map[string]string
+		host                         bool
+		probeErr                     error
+		wantExt                      string
+		wantCmd                      []string
+		wantErr                      string
 	}{
 		{
 			name:    "implicit host bash",
@@ -130,6 +126,21 @@ func TestStepRunShellParity(t *testing.T) {
 			wantExt:    ".py",
 			wantCmd:    []string{"python", "/var/run/act/workflow/1.py"},
 		},
+		{
+			name:    "run expression without a context",
+			run:     "echo ${{ COMMIT_SHA }}",
+			wantErr: "unable to interpolate the run script:",
+		},
+		{
+			name:    "shell expression without a context",
+			shell:   "${{ SHELL }}",
+			wantErr: "unable to interpolate the shell:",
+		},
+		{
+			name:       "working directory expression without a context",
+			workingDir: "${{ DIR }}",
+			wantErr:    "unable to interpolate the working directory:",
+		},
 	}
 
 	for _, test := range tests {
@@ -156,13 +167,13 @@ func TestStepRunShellParity(t *testing.T) {
 					Run:          &model.Run{JobID: "1", Workflow: &model.Workflow{Jobs: map[string]*model.Job{"1": {}}}},
 					JobContainer: jobContainer,
 				},
-				Step: &model.Step{ID: "1", Run: "echo hi", Shell: test.shell, WorkingDirectory: test.workingDir},
+				Step: &model.Step{ID: "1", Run: cmp.Or(test.run, "echo hi"), Shell: test.shell, WorkingDirectory: test.workingDir},
 				env:  test.env,
 			}
 
 			name, script, err := sr.setupShellCommand(t.Context())
 			if test.wantErr != "" {
-				require.EqualError(t, err, test.wantErr)
+				require.ErrorContains(t, err, test.wantErr)
 				return
 			}
 			require.NoError(t, err)

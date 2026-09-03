@@ -122,15 +122,19 @@ func (sal *stepActionLocal) getActionModel() *model.Action {
 	return sal.action
 }
 
-func (sal *stepActionLocal) getCompositeRunContext(ctx context.Context) *RunContext {
+func (sal *stepActionLocal) getCompositeRunContext(ctx context.Context) (*RunContext, error) {
 	if sal.compositeRunContext == nil {
 		actionDir := filepath.Join(sal.RunContext.Config.Workdir, sal.Step.Uses)
 		_, containerActionDir := getContainerActionPaths(sal.getStepModel(), actionDir, sal.RunContext)
 
-		sal.compositeRunContext = newCompositeRunContext(ctx, sal.RunContext, sal, containerActionDir)
-		sal.compositeSteps = sal.compositeRunContext.compositeExecutor(sal.action)
+		compositeRunContext, err := newCompositeRunContext(ctx, sal.RunContext, sal, containerActionDir)
+		if err != nil {
+			return nil, err
+		}
+		sal.compositeRunContext = compositeRunContext
+		sal.compositeSteps = compositeRunContext.compositeExecutor(sal.action)
 	}
-	return sal.compositeRunContext
+	return sal.compositeRunContext, nil
 }
 
 func (sal *stepActionLocal) getCompositeSteps() *compositeSteps {

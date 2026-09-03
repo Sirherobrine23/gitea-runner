@@ -254,12 +254,21 @@ func getScriptName(rc *RunContext, step *model.Step) string {
 // OCI runtime exec failed: exec failed: container_linux.go:380: starting container process caused: exec: "${{": executable file not found in $PATH: unknown
 func (sr *stepRun) setupShellCommand(ctx context.Context) (name, script string, err error) {
 	logger := common.Logger(ctx)
-	implicitShell := sr.setupShell(ctx)
-	sr.setupWorkingDirectory(ctx)
+	eval := sr.RunContext.NewStepExpressionEvaluator(ctx, sr)
+	implicitShell, err := sr.setupShell(ctx, eval)
+	if err != nil {
+		return "", "", err
+	}
+	if err := sr.setupWorkingDirectory(ctx, eval); err != nil {
+		return "", "", err
+	}
 
 	step := sr.Step
 
-	script = sr.RunContext.NewStepExpressionEvaluator(ctx, sr).Interpolate(ctx, step.Run)
+	script, err = eval.Interpolate(ctx, step.Run)
+	if err != nil {
+		return "", "", fmt.Errorf("unable to interpolate the run script: %w", err)
+	}
 	sr.interpolatedScript = script
 
 	// GitHub matches the built-in names case-insensitively, so `shell: PWSH` is valid
@@ -313,19 +322,21 @@ func (sr *stepRun) setupShellCommand(ctx context.Context) (name, script string, 
 	return name, script, err
 }
 
-func (sr *stepRun) setupShell(ctx context.Context) bool {
+func (sr *stepRun) setupShell(ctx context.Context, eval *expressionEvaluator) (bool, error) {
 	rc := sr.RunContext
 	step := sr.Step
 
-	if step.Shell == "" {
-		step.Shell = rc.Run.Job().Defaults.Run.Shell
+	shell, err := eval.Interpolate(ctx, step.Shell)
+	if err != nil {
+		return false, fmt.Errorf("unable to interpolate the shell: %w", err)
 	}
-
-	step.Shell = rc.NewStepExpressionEvaluator(ctx, sr).Interpolate(ctx, step.Shell)
-
-	if step.Shell == "" {
-		step.Shell = rc.Run.Workflow.Defaults.Run.Shell
+	if shell == "" {
+		shell = rc.jobRunDefaults.Shell
 	}
+	if shell == "" {
+		shell = rc.Run.Workflow.Defaults.Run.Shell
+	}
+	step.Shell = shell
 
 	implicitShell := step.Shell == ""
 	if implicitShell {
@@ -349,7 +360,7 @@ func (sr *stepRun) setupShell(ctx context.Context) bool {
 			}
 		}
 	}
-	return implicitShell
+	return implicitShell, nil
 }
 
 // containerHasBash probes once per job, else every implicit-shell step pays for an exec.
@@ -364,23 +375,19 @@ func (rc *RunContext) containerHasBash(ctx context.Context, env map[string]strin
 	return *top.hasBash
 }
 
-func (sr *stepRun) setupWorkingDirectory(ctx context.Context) {
+func (sr *stepRun) setupWorkingDirectory(ctx context.Context, eval *expressionEvaluator) error {
 	rc := sr.RunContext
-	step := sr.Step
-	var workingdirectory string
-
-	if step.WorkingDirectory == "" {
-		workingdirectory = rc.Run.Job().Defaults.Run.WorkingDirectory
-	} else {
-		workingdirectory = step.WorkingDirectory
+	workingdirectory, err := eval.Interpolate(ctx, sr.Step.WorkingDirectory)
+	if err != nil {
+		return fmt.Errorf("unable to interpolate the working directory: %w", err)
 	}
-
-	// jobs can receive context values, so we interpolate
-	workingdirectory = rc.NewStepExpressionEvaluator(ctx, sr).Interpolate(ctx, workingdirectory)
-
-	// but top level keys in workflow file like `defaults` or `env` can't
+	if workingdirectory == "" {
+		workingdirectory = rc.jobRunDefaults.WorkingDirectory
+	}
+	// top level keys in workflow file like `defaults` or `env` can't hold expressions
 	if workingdirectory == "" {
 		workingdirectory = rc.Run.Workflow.Defaults.Run.WorkingDirectory
 	}
 	sr.WorkingDirectory = workingdirectory
+	return nil
 }

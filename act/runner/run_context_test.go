@@ -267,6 +267,7 @@ func startJobContainerInputs(t *testing.T, workflowYAML string, cfg *Config) []*
 		},
 	}
 	rc.ExprEval = rc.NewExpressionEvaluator(t.Context())
+	require.NoError(t, rc.resolvePlatformImage(t.Context()))
 
 	// the inputs are built before the missing daemon fails the first call
 	t.Setenv("DOCKER_HOST", "unix:///nonexistent.sock")
@@ -451,7 +452,8 @@ func TestRunContext_GetBindsAndMounts(t *testing.T) {
 					config := testcase.rc.Config
 					config.Workdir = testcase.name
 					config.BindWorkdir = bindWorkDir
-					gotbind, gotmount := rctemplate.GetBindsAndMounts()
+					gotbind, gotmount, err := rctemplate.GetBindsAndMounts()
+					require.NoError(t, err)
 
 					// Name binds/mounts are either/or
 					if config.BindWorkdir {
@@ -510,7 +512,8 @@ func TestRunContext_GetBindsAndMounts(t *testing.T) {
 			rc.Run.Workflow.Jobs = map[string]*model.Job{"job1": job}
 			rc.ExprEval = rc.NewExpressionEvaluator(context.Background())
 
-			gotbind, gotmount := rc.GetBindsAndMounts()
+			gotbind, gotmount, err := rc.GetBindsAndMounts()
+			require.NoError(t, err)
 			assert.Contains(t, gotbind, "/host/mame/roms:/root/.mame/roms:ro")
 			assert.NotContains(t, gotbind, "${{ secrets.MAME }}")
 			assert.NotContains(t, gotmount, "${{ secrets.MAME }}")
@@ -539,7 +542,8 @@ func TestRunContext_GetBindsAndMounts(t *testing.T) {
 				rc.Run.JobID = "job1"
 				rc.Run.Workflow.Jobs = map[string]*model.Job{"job1": job}
 
-				gotbind, gotmount := rc.GetBindsAndMounts()
+				gotbind, gotmount, err := rc.GetBindsAndMounts()
+				require.NoError(t, err)
 
 				if len(testcase.wantbind) > 0 {
 					assert.Contains(t, gotbind, testcase.wantbind)
@@ -574,11 +578,13 @@ func TestRunContext_GetBindsAndMounts(t *testing.T) {
 			Config: &Config{},
 		}
 
-		_, gotmount := rc.GetBindsAndMounts()
+		_, gotmount, err := rc.GetBindsAndMounts()
+		require.NoError(t, err)
 		assert.NotContains(t, gotmount, sharedToolCacheVolume)
 
 		rc.Config.SharedToolCache = true
-		_, gotmount = rc.GetBindsAndMounts()
+		_, gotmount, err = rc.GetBindsAndMounts()
+		require.NoError(t, err)
 		assert.Equal(t, container.DefaultToolCache, gotmount[sharedToolCacheVolume])
 	})
 }
@@ -660,8 +666,10 @@ func TestInterpolateOutputsIsPerMatrixCombo(t *testing.T) {
 	r := &runnerImpl{config: &Config{}}
 	ctx := context.Background()
 
-	rcA := r.newRunContext(ctx, run, map[string]any{"v": "a"})
-	rcB := r.newRunContext(ctx, run, map[string]any{"v": "b"})
+	rcA, err := r.newRunContext(ctx, run, map[string]any{"v": "a"})
+	require.NoError(t, err)
+	rcB, err := r.newRunContext(ctx, run, map[string]any{"v": "b"})
+	require.NoError(t, err)
 
 	require.NoError(t, rcA.interpolateOutputs()(ctx))
 	require.NoError(t, rcB.interpolateOutputs()(ctx))
@@ -1334,12 +1342,14 @@ func TestRunContextImageOS(t *testing.T) {
 	t.Run("prefers the release in the resolved image tag", func(t *testing.T) {
 		rc := createRunsOnRunContext(t, "ubuntu-latest")
 		rc.Config.PlatformPicker = func([]string) string { return "docker.gitea.com/runner-images:ubuntu-24.04" }
+		require.NoError(t, rc.resolvePlatformImage(ctx))
 		assert.Equal(t, "ubuntu24", rc.imageOS(ctx))
 	})
 
 	t.Run("falls back to the runs-on label", func(t *testing.T) {
 		rc := createRunsOnRunContext(t, "ubuntu-22.04")
 		rc.Config.PlatformPicker = func([]string) string { return "some-image" }
+		require.NoError(t, rc.resolvePlatformImage(ctx))
 		assert.Equal(t, "ubuntu22", rc.imageOS(ctx))
 	})
 

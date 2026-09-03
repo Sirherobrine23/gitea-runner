@@ -160,7 +160,7 @@ func TestSetupEnv(t *testing.T) {
 	sm.On("getStepModel").Return(step)
 	sm.On("getEnv").Return(&env)
 
-	setupEnv(context.Background(), sm)
+	require.NoError(t, setupEnv(context.Background(), sm))
 
 	// These are commit or system specific
 	delete(env, "GITHUB_REF")

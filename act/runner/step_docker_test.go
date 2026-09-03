@@ -16,6 +16,7 @@ import (
 	"gitea.dev/actionslib/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStepDockerMain(t *testing.T) {
@@ -144,7 +145,7 @@ func TestStepDockerNewStepContainerAllocatePTY(t *testing.T) {
 			}
 			sd.RunContext.ExprEval = sd.RunContext.NewExpressionEvaluator(ctx)
 
-			_ = newStepContainer(ctx, sd, "node:14", []string{"echo", "hi"}, nil, "")
+			_, _ = newStepContainer(ctx, sd, "node:14", []string{"echo", "hi"}, nil, "")
 			assert.Equal(t, tc.allocPTY, captured.AllocatePTY)
 		})
 	}
@@ -210,10 +211,10 @@ func TestStepDockerNewStepContainerNetworkMode(t *testing.T) {
 			}
 			sd.RunContext.ExprEval = sd.RunContext.NewExpressionEvaluator(ctx)
 
-			assert.Equal(t, tc.expectDefault, sd.RunContext.IsHostEnv(ctx),
-				"IsHostEnv mismatch for platform %q", tc.platform)
+			require.NoError(t, sd.RunContext.resolvePlatformImage(ctx))
+			assert.Equal(t, tc.expectDefault, sd.RunContext.IsHostEnv(), "IsHostEnv mismatch for platform %q", tc.platform)
 
-			_ = newStepContainer(ctx, sd, "alpine:3.20", []string{"echo", "hello"}, nil, "")
+			_, _ = newStepContainer(ctx, sd, "alpine:3.20", []string{"echo", "hello"}, nil, "")
 
 			if tc.expectDefault {
 				assert.Equal(t, "default", captured.NetworkMode,

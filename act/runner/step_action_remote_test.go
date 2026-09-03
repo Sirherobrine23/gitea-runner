@@ -254,7 +254,8 @@ func TestStepActionRemote(t *testing.T) {
 
 		for _, value := range []string{"first", "second"} {
 			step.env["INPUT_SHARED"] = value
-			composite := step.getCompositeRunContext(t.Context())
+			composite, err := step.getCompositeRunContext(t.Context())
+			require.NoError(t, err)
 			assert.Equal(t, map[string]any{"shared": value}, composite.actionInputs)
 			assert.NotContains(t, composite.Env, "INPUT_SHARED")
 		}

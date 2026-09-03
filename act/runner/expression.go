@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"gitea.com/gitea/runner/act/common"
@@ -71,7 +72,7 @@ func (rc *RunContext) NewExpressionEvaluatorWithEnv(ctx context.Context, env map
 	}
 
 	ghc := rc.getGithubContext(ctx)
-	inputs := getEvaluatorInputs(ctx, rc, rc.actionInputs, ghc)
+	inputs := getEvaluatorInputs(rc, rc.actionInputs, ghc)
 
 	ee := &exprparser.EvaluationEnvironment{
 		Github: ghc,
@@ -81,7 +82,7 @@ func (rc *RunContext) NewExpressionEvaluatorWithEnv(ctx context.Context, env map
 		// todo: should be unavailable
 		// but required to interpolate/evaluate the step outputs on the job
 		Steps:     rc.getStepsContext(),
-		Secrets:   getWorkflowSecrets(ctx, rc),
+		Secrets:   getWorkflowSecrets(rc),
 		Vars:      getWorkflowVars(ctx, rc),
 		Strategy:  strategy,
 		Matrix:    rc.Matrix,
@@ -137,14 +138,14 @@ func (rc *RunContext) newStepExpressionEvaluator(ctx context.Context, step step,
 		Env:      *step.getEnv(),
 		Job:      rc.getJobContext(),
 		Steps:    rc.getStepsContext(),
-		Secrets:  getWorkflowSecrets(ctx, rc),
+		Secrets:  getWorkflowSecrets(rc),
 		Vars:     getWorkflowVars(ctx, rc),
 		Strategy: strategy,
 		Matrix:   rc.Matrix,
 		Needs:    using,
 		// todo: should be unavailable
 		// but required to interpolate/evaluate the inputs in actions/composite
-		Inputs:    getEvaluatorInputs(ctx, rc, stepInputs, rc.getGithubContext(ctx)),
+		Inputs:    getEvaluatorInputs(rc, stepInputs, rc.getGithubContext(ctx)),
 		HashFiles: getHashFilesFunction(ctx, rc),
 	}
 	ee.Runner = rc.getRunnerContext(ctx)
@@ -246,17 +247,18 @@ func (ee expressionEvaluator) EvaluateYamlNode(ctx context.Context, node *yaml.N
 	return ee.shared(ctx).EvaluateYamlNode(node)
 }
 
-func (ee expressionEvaluator) Interpolate(ctx context.Context, in string) string {
-	out, err := ee.interpolate(ctx, in)
-	if err != nil {
-		common.Logger(ctx).Errorf("Unable to interpolate expression '%s': %s", in, err)
-		return ""
-	}
-	return out
+func (ee expressionEvaluator) Interpolate(ctx context.Context, in string) (string, error) {
+	return ee.shared(ctx).Interpolate(in)
 }
 
-func (ee expressionEvaluator) interpolate(ctx context.Context, in string) (string, error) {
-	return ee.shared(ctx).Interpolate(in)
+// InterpolateName keeps the source text of a job or step name that cannot be evaluated, as GitHub does.
+func (ee expressionEvaluator) InterpolateName(ctx context.Context, in string) string {
+	out, err := ee.Interpolate(ctx, in)
+	if err != nil {
+		common.Logger(ctx).Warnf("Unable to evaluate the display name '%s': %s", in, err)
+		return in
+	}
+	return out
 }
 
 // EvalBool evaluates an expression against given evaluator. An `if:` is an expression even without
@@ -277,10 +279,10 @@ func inputsFromEnv(env map[string]string) map[string]any {
 	return inputs
 }
 
-func getEvaluatorInputs(ctx context.Context, rc *RunContext, stepInputs map[string]any, ghc *model.GithubContext) map[string]any {
+func getEvaluatorInputs(rc *RunContext, stepInputs map[string]any, ghc *model.GithubContext) map[string]any {
 	inputs := map[string]any{}
 
-	setupWorkflowInputs(ctx, &inputs, rc)
+	maps.Copy(inputs, rc.workflowCallInputs)
 	maps.Copy(inputs, stepInputs)
 
 	if ghc.EventName == "workflow_dispatch" {
@@ -324,54 +326,49 @@ func coerceInputValue(value any, inputType string) any {
 	return value == "true"
 }
 
-func setupWorkflowInputs(ctx context.Context, inputs *map[string]any, rc *RunContext) {
-	if rc.caller != nil {
-		config := rc.Run.Workflow.WorkflowCallConfig()
+// resolveWorkflowCall evaluates the caller's with: and secrets: once, as the server does before dispatching a called workflow.
+func (rc *RunContext) resolveWorkflowCall(ctx context.Context) error {
+	if rc.caller == nil {
+		return nil
+	}
+	callerJob := rc.caller.runContext.Run.Job()
+	callerEval := rc.caller.runContext.ExprEval
+	calleeEval := sync.OnceValue(func() *expressionEvaluator { return rc.NewExpressionEvaluator(ctx) })
+	config := rc.Run.Workflow.WorkflowCallConfig()
 
-		for name, input := range config.Inputs {
-			value := rc.caller.runContext.Run.Job().With[name]
-			if value != nil {
-				if str, ok := value.(string); ok {
-					// evaluate using the calling RunContext (outside)
-					value = rc.caller.runContext.ExprEval.Interpolate(ctx, str)
-				}
+	rc.workflowCallInputs = make(map[string]any, len(config.Inputs))
+	for name, input := range config.Inputs {
+		value, eval, label := callerJob.With[name], callerEval, "input"
+		if value == nil {
+			value, eval, label = input.Default, calleeEval(), "the default of input"
+		}
+		if str, ok := value.(string); ok {
+			var err error
+			if value, err = eval.Interpolate(ctx, str); err != nil {
+				return fmt.Errorf("unable to interpolate %s %s: %w", label, name, err)
 			}
+		}
+		rc.workflowCallInputs[name] = coerceInputValue(value, input.Type)
+	}
 
-			if value == nil && config != nil && config.Inputs != nil {
-				value = input.Default
-				if rc.ExprEval != nil {
-					if str, ok := value.(string); ok {
-						// evaluate using the called RunContext (inside)
-						value = rc.ExprEval.Interpolate(ctx, str)
-					}
-				}
-			}
-
-			(*inputs)[name] = coerceInputValue(value, input.Type)
+	secrets := callerJob.Secrets()
+	if secrets == nil && callerJob.InheritSecrets() {
+		secrets = rc.caller.runContext.Config.Secrets
+	}
+	rc.workflowCallSecrets = make(map[string]string, len(secrets))
+	for k, v := range secrets {
+		var err error
+		if rc.workflowCallSecrets[k], err = callerEval.Interpolate(ctx, v); err != nil {
+			return fmt.Errorf("unable to interpolate secret %s: %w", k, err)
 		}
 	}
+	return nil
 }
 
-func getWorkflowSecrets(ctx context.Context, rc *RunContext) map[string]string {
+func getWorkflowSecrets(rc *RunContext) map[string]string {
 	if rc.caller != nil {
-		job := rc.caller.runContext.Run.Job()
-		secrets := job.Secrets()
-
-		if secrets == nil && job.InheritSecrets() {
-			secrets = rc.caller.runContext.Config.Secrets
-		}
-
-		// Interpolate into a new map. secrets may be the shared Config.Secrets (or the job's
-		// map), which other parallel jobs read concurrently (e.g. log masking), so mutating it
-		// in place is a data race.
-		interpolated := make(map[string]string, len(secrets))
-		for k, v := range secrets {
-			interpolated[k] = rc.caller.runContext.ExprEval.Interpolate(ctx, v)
-		}
-
-		return interpolated
+		return rc.workflowCallSecrets
 	}
-
 	return rc.Config.Secrets
 }
 

@@ -67,7 +67,11 @@ type RunContext struct {
 	actionInputs        map[string]any // inputs of the composite action this runs, nil for a job
 	Masks               []string
 	cleanUpJobContainer common.Executor
-	caller              *caller // job calling this RunContext (reusable workflows)
+	caller              *caller           // job calling this RunContext (reusable workflows)
+	workflowCallInputs  map[string]any    // the caller's with:, resolved once by resolveWorkflowCall
+	workflowCallSecrets map[string]string // the caller's secrets:, resolved once by resolveWorkflowCall
+	jobRunDefaults      model.RunDefaults // defaults.run, resolved once at job setup as GitHub does
+	platformImage       string            // container.image or the runs-on pick, resolved once by isEnabled
 	// summaryFileInitialized tracks which per-step summary files (workflow/step-summary-N.md)
 	// have already been created on the JobContainer. The runner sets up file-command files
 	// via JobContainer.Copy at the start of every phase, which truncates them — fine for
@@ -302,7 +306,7 @@ func splitVolumes(specs []string) ([]string, map[string]string, map[string]bool)
 }
 
 // Returns the binds and mounts for the container, resolving paths as appopriate
-func (rc *RunContext) GetBindsAndMounts() ([]string, map[string]string) {
+func (rc *RunContext) GetBindsAndMounts() ([]string, map[string]string, error) {
 	name := rc.jobContainerName()
 	ext := container.LinuxContainerEnvironmentExtensions{}
 
@@ -311,7 +315,10 @@ func (rc *RunContext) GetBindsAndMounts() ([]string, map[string]string) {
 		if container := job.Container(); container != nil {
 			for _, v := range container.Volumes {
 				if rc.ExprEval != nil {
-					v = rc.ExprEval.Interpolate(context.Background(), v)
+					var err error
+					if v, err = rc.ExprEval.Interpolate(context.Background(), v); err != nil {
+						return nil, nil, fmt.Errorf("unable to interpolate container.volumes: %w", err)
+					}
 				}
 				volumes = append(volumes, v)
 			}
@@ -345,7 +352,7 @@ func (rc *RunContext) GetBindsAndMounts() ([]string, map[string]string) {
 		}
 	}
 
-	return binds, mounts
+	return binds, mounts, nil
 }
 
 func (rc *RunContext) startHostEnvironment() common.Executor {
@@ -436,7 +443,7 @@ var newContainer = container.NewContainer
 func (rc *RunContext) startJobContainer() common.Executor {
 	return func(ctx context.Context) error {
 		logger := common.Logger(ctx)
-		image := rc.platformImage(ctx)
+		image := rc.platformImage
 		logWriter := rc.commandLogWriter(ctx)
 
 		username, password, err := rc.handleCredentials(ctx)
@@ -455,7 +462,10 @@ func (rc *RunContext) startJobContainer() common.Executor {
 		envList = append(envList, fmt.Sprintf("%s=%s", "LANG", "C.UTF-8")) // Use same locale as GitHub Actions
 
 		ext := container.LinuxContainerEnvironmentExtensions{}
-		binds, mounts := rc.GetBindsAndMounts()
+		binds, mounts, err := rc.GetBindsAndMounts()
+		if err != nil {
+			return err
+		}
 
 		// specify the network to which the container will connect when `docker create` stage. (like execute command line: docker create --network <networkName> <image>)
 		// if using service containers, will create a new network for the containers.
@@ -466,7 +476,10 @@ func (rc *RunContext) startJobContainer() common.Executor {
 		for serviceID, spec := range rc.Run.Job().Services {
 			// GitHub compatibility: skip services whose image evaluates to an
 			// empty string, enabling conditional services via expressions
-			serviceImage := rc.ExprEval.Interpolate(ctx, spec.Image)
+			serviceImage, err := rc.ExprEval.Interpolate(ctx, spec.Image)
+			if err != nil {
+				return fmt.Errorf("unable to interpolate service %s image: %w", serviceID, err)
+			}
 			if serviceImage == "" {
 				logger.Infof("The service '%s' will not be started because the container definition has an empty image.", serviceID)
 				continue
@@ -476,16 +489,20 @@ func (rc *RunContext) startJobContainer() common.Executor {
 			// a service reaches the internet the way the job does; its own env still wins
 			maps0.Copy(interpolatedEnvs, rc.Config.ProxyEnv)
 			for k, v := range spec.Env {
-				interpolatedEnvs[k] = rc.ExprEval.Interpolate(ctx, v)
+				if interpolatedEnvs[k], err = rc.ExprEval.Interpolate(ctx, v); err != nil {
+					return fmt.Errorf("unable to interpolate service %s env %s: %w", serviceID, k, err)
+				}
 			}
 			envs := make([]string, 0, len(interpolatedEnvs))
 			for k, v := range interpolatedEnvs {
 				envs = append(envs, fmt.Sprintf("%s=%s", k, v))
 			}
 			// interpolate cmd
-			interpolatedCmd := make([]string, 0, len(spec.Cmd))
-			for _, v := range spec.Cmd {
-				interpolatedCmd = append(interpolatedCmd, rc.ExprEval.Interpolate(ctx, v))
+			interpolatedCmd := make([]string, len(spec.Cmd))
+			for i, v := range spec.Cmd {
+				if interpolatedCmd[i], err = rc.ExprEval.Interpolate(ctx, v); err != nil {
+					return fmt.Errorf("unable to interpolate service %s command: %w", serviceID, err)
+				}
 			}
 			// keep these local: reusing username/password would overwrite the
 			// credentials the job container is pulled with further down
@@ -494,19 +511,27 @@ func (rc *RunContext) startJobContainer() common.Executor {
 				return fmt.Errorf("failed to handle service %s credentials: %w", serviceID, err)
 			}
 
-			interpolatedVolumes := make([]string, 0, len(spec.Volumes))
-			for _, volume := range spec.Volumes {
-				interpolatedVolumes = append(interpolatedVolumes, rc.ExprEval.Interpolate(ctx, volume))
+			interpolatedVolumes := make([]string, len(spec.Volumes))
+			for i, volume := range spec.Volumes {
+				if interpolatedVolumes[i], err = rc.ExprEval.Interpolate(ctx, volume); err != nil {
+					return fmt.Errorf("unable to interpolate service %s volumes: %w", serviceID, err)
+				}
 			}
 			serviceBinds, serviceMounts, _ := splitVolumes(interpolatedVolumes)
 
-			interpolatedPorts := make([]string, 0, len(spec.Ports))
-			for _, port := range spec.Ports {
-				interpolatedPorts = append(interpolatedPorts, rc.ExprEval.Interpolate(ctx, port))
+			interpolatedPorts := make([]string, len(spec.Ports))
+			for i, port := range spec.Ports {
+				if interpolatedPorts[i], err = rc.ExprEval.Interpolate(ctx, port); err != nil {
+					return fmt.Errorf("unable to interpolate service %s ports: %w", serviceID, err)
+				}
 			}
 			exposedPorts, portBindings, err := nat.ParsePortSpecs(interpolatedPorts)
 			if err != nil {
 				return fmt.Errorf("failed to parse service %s ports: %w", serviceID, err)
+			}
+			serviceOptions, err := rc.ExprEval.Interpolate(ctx, spec.Options)
+			if err != nil {
+				return fmt.Errorf("unable to interpolate service %s options: %w", serviceID, err)
 			}
 
 			serviceContainerName := createContainerName(rc.jobContainerName(), serviceID)
@@ -525,7 +550,7 @@ func (rc *RunContext) startJobContainer() common.Executor {
 				UsernsMode:      rc.Config.UsernsMode,
 				Platform:        rc.Config.ContainerArchitecture,
 				AutoRemove:      false, // so a dead service's log survives, cleanupJobResources removes it
-				WorkflowOptions: rc.ExprEval.Interpolate(ctx, spec.Options),
+				WorkflowOptions: serviceOptions,
 				NetworkMode:     networkName,
 				NetworkAliases:  []string{serviceID},
 				ExposedPorts:    exposedPorts,
@@ -541,6 +566,10 @@ func (rc *RunContext) startJobContainer() common.Executor {
 		// For Gitea, `jobContainerNetwork` should be the same as `networkName`
 		jobContainerNetwork := networkName
 
+		workflowOptions, err := rc.workflowOptions(ctx)
+		if err != nil {
+			return err
+		}
 		rc.JobContainer = newContainer(&container.NewContainerInput{
 			Cmd:             nil,
 			Entrypoint:      []string{"/bin/sleep", fmt.Sprint(rc.Config.ContainerMaxLifetime.Round(time.Second).Seconds())},
@@ -560,7 +589,7 @@ func (rc *RunContext) startJobContainer() common.Executor {
 			UsernsMode:      rc.Config.UsernsMode,
 			Platform:        rc.Config.ContainerArchitecture,
 			RunnerOptions:   rc.Config.ContainerOptions,
-			WorkflowOptions: rc.workflowOptions(ctx),
+			WorkflowOptions: workflowOptions,
 			AutoRemove:      true,
 			ValidVolumes:    rc.validVolumes(),
 			AllocatePTY:     rc.Config.AllocatePTY,
@@ -931,7 +960,7 @@ func (rc *RunContext) interpolateOutputs() common.Executor {
 		outputs := make(map[string]string, len(rc.outputTemplate))
 		var err error
 		for k, v := range rc.outputTemplate {
-			if outputs[k], err = ee.interpolate(ctx, v); err != nil {
+			if outputs[k], err = ee.Interpolate(ctx, v); err != nil {
 				err = fmt.Errorf("failed to evaluate job output %q: %w", k, err)
 				break
 			}
@@ -951,7 +980,7 @@ func (rc *RunContext) interpolateOutputs() common.Executor {
 func (rc *RunContext) startContainer() common.Executor {
 	return func(ctx context.Context) error {
 		var err error
-		if rc.IsHostEnv(ctx) {
+		if rc.IsHostEnv() {
 			err = rc.startHostEnvironment()(ctx)
 		} else {
 			err = rc.startJobContainer()(ctx)
@@ -981,10 +1010,8 @@ func (rc *RunContext) cleanupFailedStart(ctx context.Context) {
 	}
 }
 
-func (rc *RunContext) IsHostEnv(ctx context.Context) bool {
-	platform := rc.runsOnImage(ctx)
-	image := rc.containerImage(ctx)
-	return image == "" && strings.EqualFold(platform, "-self-hosted")
+func (rc *RunContext) IsHostEnv() bool {
+	return strings.EqualFold(rc.platformImage, "-self-hosted")
 }
 
 func (rc *RunContext) stopContainer() common.Executor {
@@ -1069,32 +1096,35 @@ func (rc *RunContext) Executor() (common.Executor, error) {
 	}, nil
 }
 
-func (rc *RunContext) containerImage(ctx context.Context) string {
-	job := rc.Run.Job()
-
-	c := job.Container()
-	if c != nil {
-		return rc.ExprEval.Interpolate(ctx, c.Image)
+func (rc *RunContext) containerImage(ctx context.Context) (string, error) {
+	c := rc.Run.Job().Container()
+	if c == nil {
+		return "", nil
 	}
-
-	return ""
+	image, err := rc.ExprEval.Interpolate(ctx, c.Image)
+	if err != nil {
+		return "", fmt.Errorf("unable to interpolate container.image: %w", err)
+	}
+	return image, nil
 }
 
-func (rc *RunContext) runsOnImage(ctx context.Context) string {
+func (rc *RunContext) runsOnImage(ctx context.Context) (string, error) {
 	if rc.Run.Job().RunsOn() == nil {
 		common.Logger(ctx).Errorf("'runs-on' key not defined in %s", rc.String())
 	}
 
-	job := rc.Run.Job()
-	runsOn := job.RunsOn()
+	runsOn := rc.Run.Job().RunsOn()
 	for i, v := range runsOn {
-		runsOn[i] = rc.ExprEval.Interpolate(ctx, v)
+		var err error
+		if runsOn[i], err = rc.ExprEval.Interpolate(ctx, v); err != nil {
+			return "", fmt.Errorf("unable to interpolate runs-on: %w", err)
+		}
 	}
 
 	if rc.Config.PlatformPicker != nil {
-		return rc.Config.PlatformPicker(runsOn)
+		return rc.Config.PlatformPicker(runsOn), nil
 	}
-	return ""
+	return "", nil
 }
 
 func (rc *RunContext) runsOnPlatformNames(ctx context.Context) []string {
@@ -1115,21 +1145,26 @@ func (rc *RunContext) runsOnPlatformNames(ctx context.Context) []string {
 	return model.RunsOnFromNode(rawRunsOn)
 }
 
-func (rc *RunContext) platformImage(ctx context.Context) string {
-	if containerImage := rc.containerImage(ctx); containerImage != "" {
-		return containerImage
+// resolvePlatformImage evaluates the job's image once, so every consumer sees the image the job started with.
+func (rc *RunContext) resolvePlatformImage(ctx context.Context) error {
+	image, err := rc.containerImage(ctx)
+	if err == nil && image == "" {
+		image, err = rc.runsOnImage(ctx)
 	}
-
-	return rc.runsOnImage(ctx)
+	rc.platformImage = image
+	return err
 }
 
-func (rc *RunContext) workflowOptions(ctx context.Context) string {
+func (rc *RunContext) workflowOptions(ctx context.Context) (string, error) {
 	c := rc.Run.Job().Container()
 	if c == nil {
-		return ""
+		return "", nil
 	}
-
-	return rc.ExprEval.Interpolate(ctx, c.Options)
+	options, err := rc.ExprEval.Interpolate(ctx, c.Options)
+	if err != nil {
+		return "", fmt.Errorf("unable to interpolate container.options: %w", err)
+	}
+	return options, nil
 }
 
 func (rc *RunContext) isEnabled(ctx context.Context) (bool, error) {
@@ -1159,8 +1194,10 @@ func (rc *RunContext) isEnabled(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 
-	img := rc.platformImage(ctx)
-	if img == "" {
+	if err := rc.resolvePlatformImage(ctx); err != nil {
+		return false, err
+	}
+	if rc.platformImage == "" {
 		for _, platformName := range rc.runsOnPlatformNames(ctx) {
 			l.Infof("Skipping unsupported platform -- Try running with `-P %+v=...`", platformName)
 		}
@@ -1547,7 +1584,7 @@ func (rc *RunContext) imageOS(ctx context.Context) string {
 		// log that runs-on is missing.
 		return ""
 	}
-	if imageOS := imageOSFromImage(rc.platformImage(ctx)); imageOS != "" {
+	if imageOS := imageOSFromImage(rc.platformImage); imageOS != "" {
 		return imageOS
 	}
 
@@ -1609,14 +1646,23 @@ func (rc *RunContext) interpolateCredentials(ctx context.Context, credentials ma
 	}
 
 	ee := rc.NewExpressionEvaluator(ctx)
-	username := ee.Interpolate(ctx, credentials["username"])
-	if username == "" {
-		return "", "", errors.New("failed to interpolate " + prefix + "credentials.username")
+	interpolate := func(key string) (string, error) {
+		value, err := ee.Interpolate(ctx, credentials[key])
+		if err != nil {
+			return "", fmt.Errorf("failed to interpolate %scredentials.%s: %w", prefix, key, err)
+		}
+		if value == "" {
+			return "", fmt.Errorf("failed to interpolate %scredentials.%s", prefix, key)
+		}
+		return value, nil
 	}
-	password := ee.Interpolate(ctx, credentials["password"])
-	if password == "" {
-		return "", "", errors.New("failed to interpolate " + prefix + "credentials.password")
+	username, err := interpolate("username")
+	if err != nil {
+		return "", "", err
 	}
-
+	password, err := interpolate("password")
+	if err != nil {
+		return "", "", err
+	}
 	return username, password, nil
 }
