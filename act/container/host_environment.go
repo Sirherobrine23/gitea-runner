@@ -92,7 +92,7 @@ func (e *HostEnvironment) Copy(destPath string, files ...*FileEntry) common.Exec
 	}
 }
 
-func (e *HostEnvironment) CopyDir(destPath, srcPath string, useGitIgnore bool) common.Executor {
+func (e *HostEnvironment) CopyDir(destPath, srcPath string, useGitIgnore, skipGitDir bool) common.Executor {
 	return func(ctx context.Context) error {
 		logger := common.Logger(ctx)
 		srcPrefix := filepath.Dir(srcPath)
@@ -110,9 +110,10 @@ func (e *HostEnvironment) CopyDir(destPath, srcPath string, useGitIgnore bool) c
 			ignorer = gitignore.NewMatcher(ps)
 		}
 		fc := &filecollector.FileCollector{
-			Ignorer:   ignorer,
-			SrcPath:   srcPath,
-			SrcPrefix: srcPrefix,
+			Ignorer:    ignorer,
+			SrcPath:    srcPath,
+			SrcPrefix:  srcPrefix,
+			SkipGitDir: skipGitDir,
 			Handler: &filecollector.CopyCollector{
 				DstDir: destPath,
 			},

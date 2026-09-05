@@ -244,7 +244,7 @@ func TestPatchActionsAtTheContainerCopy(t *testing.T) {
 		require.NoError(t, os.WriteFile(script, []byte(gateTSC), 0o600))
 
 		var copied string
-		cm.On("CopyDir", mock.Anything, mock.Anything, mock.Anything).Return(func(context.Context) error {
+		cm.On("CopyDir", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(func(context.Context) error {
 			body, err := os.ReadFile(script)
 			require.NoError(t, err)
 			copied = string(body)

@@ -47,8 +47,30 @@ func TestCopyDir(t *testing.T) {
 	_ = os.MkdirAll(e.TmpDir, 0o700)
 	_ = os.MkdirAll(e.ToolCache, 0o700)
 	_ = os.MkdirAll(e.ActPath, 0o700)
-	err := e.CopyDir(e.Workdir, e.Path, true)(ctx)
+	err := e.CopyDir(e.Workdir, e.Path, true, false)(ctx)
 	assert.NoError(t, err)
+}
+
+func TestCopyDirSkipGitDir(t *testing.T) {
+	for name, skipGitDir := range map[string]bool{"kept for a workspace copy": false, "skipped for an action copy": true} {
+		t.Run(name, func(t *testing.T) {
+			src := filepath.Join(t.TempDir(), "action")
+			require.NoError(t, os.MkdirAll(filepath.Join(src, ".git", "objects"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(src, ".git", "objects", "pack"), []byte("x"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(src, "action.yml"), []byte("name: x\n"), 0o600))
+
+			dest := filepath.Join(t.TempDir(), "dest")
+			e := &HostEnvironment{StdOut: os.Stdout}
+			require.NoError(t, e.CopyDir(dest, src+string(filepath.Separator), false, skipGitDir)(context.Background()))
+
+			assert.FileExists(t, filepath.Join(dest, "action.yml"))
+			if skipGitDir {
+				assert.NoDirExists(t, filepath.Join(dest, ".git"))
+			} else {
+				assert.FileExists(t, filepath.Join(dest, ".git", "objects", "pack"))
+			}
+		})
+	}
 }
 
 func TestGetContainerArchive(t *testing.T) {

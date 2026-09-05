@@ -94,10 +94,11 @@ func (cc *CopyCollector) WriteFile(fpath string, fi fs.FileInfo, linkName string
 }
 
 type FileCollector struct {
-	Ignorer   gitignore.Matcher
-	SrcPath   string
-	SrcPrefix string
-	Handler   Handler
+	Ignorer    gitignore.Matcher
+	SrcPath    string
+	SrcPrefix  string
+	SkipGitDir bool
+	Handler    Handler
 }
 
 func openGitIndex(path string) (*index.Index, error) {
@@ -122,6 +123,12 @@ func (fc *FileCollector) CollectFiles(ctx context.Context, submodulePath []strin
 		split := strings.Split(sansPrefix, string(filepath.Separator))
 		// The root folders should be skipped, submodules only have the last path component set to "." by filepath.Walk
 		if fi.IsDir() && len(split) > 0 && split[len(split)-1] == "." {
+			return nil
+		}
+		if fc.SkipGitDir && split[len(split)-1] == ".git" {
+			if fi.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		var entry *index.Entry

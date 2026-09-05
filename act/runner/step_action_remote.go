@@ -169,7 +169,7 @@ func (sar *stepActionRemote) main() common.Executor {
 					return fmt.Errorf("unable to interpolate with.path: %w", err)
 				}
 				copyToPath := path.Join(sar.RunContext.JobContainer.ToContainerPath(sar.RunContext.Config.Workdir), checkoutPath)
-				return sar.RunContext.JobContainer.CopyDir(copyToPath, sar.RunContext.Config.Workdir+string(filepath.Separator)+".", sar.RunContext.Config.UseGitIgnore)(ctx)
+				return sar.RunContext.JobContainer.CopyDir(copyToPath, sar.RunContext.Config.Workdir+string(filepath.Separator)+".", sar.RunContext.Config.UseGitIgnore, false)(ctx)
 			}
 
 			return sar.runAction(sar, sar.actionDir(), sar.remoteAction)(ctx)

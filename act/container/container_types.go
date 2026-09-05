@@ -90,7 +90,7 @@ type Info struct {
 type Container interface {
 	Create(capAdd, capDrop []string) common.Executor
 	Copy(destPath string, files ...*FileEntry) common.Executor
-	CopyDir(destPath, srcPath string, useGitIgnore bool) common.Executor
+	CopyDir(destPath, srcPath string, useGitIgnore, skipGitDir bool) common.Executor
 	GetContainerArchive(ctx context.Context, srcPath string) (io.ReadCloser, error)
 	Inspect(ctx context.Context) (*Info, error)
 	DumpLogs(ctx context.Context) error

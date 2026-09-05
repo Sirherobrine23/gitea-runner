@@ -471,7 +471,7 @@ func TestRejectsMissingContainer(t *testing.T) {
 		assert.Contains(t, err.Error(), `container "job-1" does not exist`, op)
 	}
 	check("copyContent", cr.copyContent("/var/run/act", &FileEntry{Name: "x", Mode: 0o644})(ctx))
-	check("copyDir", cr.copyDir("/var/run/act", "/src", false)(ctx))
+	check("copyDir", cr.copyDir("/var/run/act", "/src", false, false)(ctx))
 	check("exec", cr.exec([]string{"echo"}, nil, "", "")(ctx))
 	_, err := cr.GetContainerArchive(ctx, "/var/run/act/x")
 	check("GetContainerArchive", err)

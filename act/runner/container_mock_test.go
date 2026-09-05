@@ -57,8 +57,8 @@ func (cm *containerMock) Copy(destPath string, files ...*container.FileEntry) co
 	return args.Get(0).(func(context.Context) error)
 }
 
-func (cm *containerMock) CopyDir(destPath, srcPath string, useGitIgnore bool) common.Executor {
-	args := cm.Called(destPath, srcPath, useGitIgnore)
+func (cm *containerMock) CopyDir(destPath, srcPath string, useGitIgnore, skipGitDir bool) common.Executor {
+	args := cm.Called(destPath, srcPath, useGitIgnore, skipGitDir)
 	return args.Get(0).(func(context.Context) error)
 }
 

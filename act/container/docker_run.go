@@ -138,12 +138,12 @@ func (cr *containerReference) Copy(destPath string, files ...*FileEntry) common.
 	).IfNot(common.Dryrun)
 }
 
-func (cr *containerReference) CopyDir(destPath, srcPath string, useGitIgnore bool) common.Executor {
+func (cr *containerReference) CopyDir(destPath, srcPath string, useGitIgnore, skipGitDir bool) common.Executor {
 	return common.NewPipelineExecutor(
 		common.NewInfoExecutor("docker cp src=%s dst=%s", srcPath, destPath),
 		cr.connect(),
 		cr.find(),
-		cr.copyDir(destPath, srcPath, useGitIgnore),
+		cr.copyDir(destPath, srcPath, useGitIgnore, skipGitDir),
 		func(ctx context.Context) error {
 			// If this fails, then folders have wrong permissions on non root container
 			if cr.UID != 0 || cr.GID != 0 {
@@ -940,7 +940,7 @@ func (cr *containerReference) waitForCommand(ctx context.Context, resp client.Hi
 	}
 }
 
-func (cr *containerReference) copyDir(dstPath, srcPath string, useGitIgnore bool) common.Executor {
+func (cr *containerReference) copyDir(dstPath, srcPath string, useGitIgnore, skipGitDir bool) common.Executor {
 	return func(ctx context.Context) error {
 		if cr.id == "" {
 			return cr.missingContainerError("copy directory to %s", dstPath)
@@ -981,9 +981,10 @@ func (cr *containerReference) copyDir(dstPath, srcPath string, useGitIgnore bool
 		}
 
 		fc := &filecollector.FileCollector{
-			Ignorer:   ignorer,
-			SrcPath:   srcPath,
-			SrcPrefix: srcPrefix,
+			Ignorer:    ignorer,
+			SrcPath:    srcPath,
+			SrcPrefix:  srcPrefix,
+			SkipGitDir: skipGitDir,
 			Handler: &filecollector.TarCollector{
 				TarWriter: tw,
 				UID:       cr.UID,
