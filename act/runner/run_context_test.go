@@ -1294,6 +1294,29 @@ func TestGetJobContextReportsContainers(t *testing.T) {
 	}, jobContext.Services)
 }
 
+func TestCaptureJobContainerInfoExportsDockerWorkspace(t *testing.T) {
+	job := &containerMock{}
+	job.On("Inspect", mock.Anything).Return(&container.Info{
+		ID:     "job-container-id",
+		Mounts: map[string]string{"/workspace/owner/repo": "/var/lib/docker/volumes/job/_data"},
+	}, nil)
+	rc := &RunContext{
+		Config:       &Config{Workdir: "/workspace/owner/repo/"},
+		Env:          map[string]string{},
+		JobContainer: job,
+	}
+
+	require.NoError(t, rc.captureJobContainerInfo()(context.Background()))
+
+	assert.Equal(t, "job-container-id", rc.jobContainerID)
+	assert.Equal(t, "/var/lib/docker/volumes/job/_data", rc.Env["GITEA_DOCKER_WORKSPACE"])
+
+	rc.Config.Workdir = "/elsewhere"
+	rc.Env = map[string]string{}
+	require.NoError(t, rc.captureJobContainerInfo()(context.Background()))
+	assert.NotContains(t, rc.Env, "GITEA_DOCKER_WORKSPACE")
+}
+
 // A job that never started a container reports an empty context, not a placeholder.
 func TestGetJobContextWithoutContainer(t *testing.T) {
 	jobContext := (&RunContext{}).getJobContext()

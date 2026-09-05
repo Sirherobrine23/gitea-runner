@@ -801,6 +801,20 @@ func TestContainerInfoFromInspect(t *testing.T) {
 		assert.Equal(t, "abc123", info.ID)
 		assert.Equal(t, HealthNone, info.Health)
 	})
+
+	t.Run("reports the mount sources by container path", func(t *testing.T) {
+		info := containerInfoFromInspect(container.InspectResponse{
+			Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "job", Source: "/var/lib/docker/volumes/job/_data", Destination: "/workspace/owner/repo"},
+				{Type: mount.TypeBind, Source: "/var/run/docker.sock", Destination: "/var/run/docker.sock"},
+			},
+		})
+
+		assert.Equal(t, map[string]string{
+			"/workspace/owner/repo": "/var/lib/docker/volumes/job/_data",
+			"/var/run/docker.sock":  "/var/run/docker.sock",
+		}, info.Mounts)
+	})
 }
 
 func TestMergeContainerConfigsVolumesReplaceRunnerMounts(t *testing.T) {

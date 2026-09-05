@@ -29,6 +29,14 @@ func RemoveImage(ctx context.Context, imageName string, force, pruneChildren boo
 	return false, errors.New("Unsupported Operation")
 }
 
+func DockerProxyDir(ctx context.Context) string {
+	return ""
+}
+
+func StartDockerProxy(daemonSocket, dir, job string) (*DockerProxy, error) {
+	return nil, errors.New("Unsupported Operation")
+}
+
 // NewDockerBuildExecutor function to create a run executor for the container
 func NewDockerBuildExecutor(input NewDockerBuildExecutorInput) common.Executor {
 	return func(ctx context.Context) error {

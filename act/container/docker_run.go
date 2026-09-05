@@ -252,6 +252,10 @@ func containerInfoFromInspect(inspect container.InspectResponse) *Info {
 		ID:     inspect.ID,
 		Health: HealthNone,
 		Ports:  map[string]string{}, // an empty map, never null, in the expression context
+		Mounts: make(map[string]string, len(inspect.Mounts)),
+	}
+	for _, mountPoint := range inspect.Mounts {
+		info.Mounts[mountPoint.Destination] = mountPoint.Source
 	}
 
 	if state := inspect.State; state != nil {

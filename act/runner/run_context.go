@@ -96,6 +96,7 @@ type RunContext struct {
 	jobContainerID string
 	hasBash        *bool // memoized implicit-shell probe, only set on the top-level RunContext
 	jobNetworkName string
+	dockerProxy    *container.DockerProxy
 	// stepEnv is a copy of the running step's environment, so that workflow commands parsed out
 	// of the container's output can be judged against it. Written by runStepExecutor and read on
 	// the log-writer goroutine, hence unsecureCommandMu, which also guards unsecureCommandErr.
@@ -253,9 +254,36 @@ func (rc *RunContext) validVolumes() []string {
 	if rc.Config.BindWorkdir {
 		volumes = append(volumes, rc.Config.Workdir)
 	}
+	if rc.dockerProxy != nil {
+		volumes = append(volumes, rc.dockerProxy.Socket)
+	}
 	// TODO: add a new configuration to control whether the docker daemon can be mounted
 	return append(volumes, name, name+"-env",
 		getDockerDaemonSocketMountPath(rc.containerDaemonSocket()))
+}
+
+func (rc *RunContext) jobDockerSocket() string {
+	if rc.dockerProxy != nil {
+		return rc.dockerProxy.Socket
+	}
+	return getDockerDaemonSocketMountPath(rc.containerDaemonSocket())
+}
+
+func (rc *RunContext) startDockerProxy(ctx context.Context) {
+	daemonSocket := rc.containerDaemonSocket()
+	if daemonSocket == "-" || strings.HasPrefix(strings.ToLower(daemonSocket), "npipe://") {
+		return
+	}
+	dir := container.DockerProxyDir(ctx)
+	if dir == "" {
+		return
+	}
+	proxy, err := container.StartDockerProxy(getDockerDaemonSocketMountPath(daemonSocket), dir, rc.jobContainerName())
+	if err != nil {
+		common.Logger(ctx).Warnf("docker proxy not started, the job gets the daemon socket directly: %v", err)
+		return
+	}
+	rc.dockerProxy = proxy
 }
 
 // toolCache returns the tool cache path the job sees, relocatable through RUNNER_TOOL_CACHE.
@@ -327,8 +355,8 @@ func (rc *RunContext) GetBindsAndMounts() ([]string, map[string]string, error) {
 	// the runner's own mounts below yield to the targets the job claims
 	binds, mounts, claimed := splitVolumes(volumes)
 
-	if daemonSocket := rc.containerDaemonSocket(); daemonSocket != "-" && !claimed["/var/run/docker.sock"] {
-		binds = append(binds, getDockerDaemonSocketMountPath(daemonSocket)+":/var/run/docker.sock")
+	if rc.containerDaemonSocket() != "-" && !claimed["/var/run/docker.sock"] {
+		binds = append(binds, rc.jobDockerSocket()+":/var/run/docker.sock")
 	}
 	if rc.Config.SharedToolCache {
 		if toolCache := rc.toolCache(container.DefaultToolCache); !claimed[toolCache] {
@@ -455,6 +483,7 @@ func (rc *RunContext) startJobContainer() common.Executor {
 		// For gitea, to support --volumes-from <container_name_or_id> in options.
 		// We need to set the container name to the environment variable.
 		rc.Env["JOB_CONTAINER_NAME"] = name
+		rc.startDockerProxy(ctx)
 
 		envList := make([]string, 0)
 
@@ -650,6 +679,12 @@ func (rc *RunContext) cleanupJobResources(networkName string, createAndDeleteNet
 			if err := rc.stopServiceContainers()(ctx); err != nil {
 				logger.Errorf("Error while cleaning services: %v", err)
 			}
+		}
+		if rc.dockerProxy != nil {
+			if err := rc.dockerProxy.Close(ctx); err != nil {
+				logger.Errorf("Error while removing what the job created: %v", err)
+			}
+			rc.dockerProxy = nil
 		}
 		if removeJobContainer {
 			// after the containers using them, services can hold these via `--volumes-from`
@@ -914,6 +949,9 @@ func (rc *RunContext) captureJobContainerInfo() common.Executor {
 			return nil
 		}
 		rc.jobContainerID = info.ID
+		if source := info.Mounts[rc.githubWorkspace()]; source != "" {
+			rc.Env["GITEA_DOCKER_WORKSPACE"] = source
+		}
 		return nil
 	}
 }

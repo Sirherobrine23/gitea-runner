@@ -256,11 +256,10 @@ container:
   #require_docker: false
   # Timeout to wait for the docker daemon to be reachable, if docker is required by require_docker or runner
   #docker_timeout: 0s
-  # Bind the workspace to the host filesystem instead of using Docker volumes.
-  # This is required for Docker-in-Docker (DinD) setups when jobs use docker compose
-  # with bind mounts (e.g., ".:/app"), as volume-based workspaces are not accessible
-  # from the DinD daemon's filesystem. When enabled, ensure the workspace parent
-  # directory is also mounted into the runner container.
+  # Mount the workspace from a host directory instead of a Docker volume, so jobs
+  # can bind-mount it by its own path into sibling containers (".:/app" in docker
+  # compose). Not needed when workflows use the GITEA_DOCKER_WORKSPACE variable.
+  # The workspace parent directory must be mounted into the runner container.
   #bind_workdir: false
   # How long a job waits for a service container that declares a healthcheck to become
   # healthy. A negative value (e.g. -1s) starts the steps without waiting.
