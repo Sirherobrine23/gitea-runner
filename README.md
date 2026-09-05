@@ -201,10 +201,10 @@ A label is written as:
 | Part | Meaning |
 | --- | --- |
 | `name` | The name a workflow refers to in `runs-on`, e.g. `ubuntu-latest`. |
-| `schema` | Either `docker` or `host`. Defaults to `host` when omitted. |
-| `args` | Only used by the `docker` schema: the image to run the job in. |
+| `schema` | Either `docker`, `host`, or `macos-vm`. Defaults to `host` when omitted. |
+| `args` | Used by `docker` for the image, and by `macos-vm` for the source VM. |
 
-Two schemas are supported:
+Three schemas are supported:
 
 - **`docker://<image>`** — the job runs inside a container created from `<image>`:
 
@@ -218,15 +218,21 @@ Two schemas are supported:
   macos:host
   ```
 
+- **`macos-vm://<source-vm>`** — the job runs inside an ephemeral macOS VM created by `runner-executor-macos`. The VM image must include the runner guest agent. Service containers are not supported with this schema. See `docs/macos-vm-executor.md` for configuration, integration testing, and cleanup details:
+
+  ```text
+  macos-latest:macos-vm://ghcr.io/cirruslabs/macos-sonoma-base:latest
+  ```
+
 So with the labels
 
 ```text
-ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest,macos:host
+ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest,macos:host,macos-latest:macos-vm://ghcr.io/cirruslabs/macos-sonoma-base:latest
 ```
 
-a workflow with `runs-on: ubuntu-latest` is executed in the `runner-images:ubuntu-latest` container, and one with `runs-on: macos` is executed directly on the host.
+a workflow with `runs-on: ubuntu-latest` is executed in the `runner-images:ubuntu-latest` container, one with `runs-on: macos` is executed directly on the host, and one with `runs-on: macos-latest` is executed in the macOS VM.
 
-Names may themselves contain a colon (for example `pool:e57e18d4-10d4-406f-93bf-60f127221bdd`); only `host` and `docker` are treated as schemas.
+Names may themselves contain a colon (for example `pool:e57e18d4-10d4-406f-93bf-60f127221bdd`); only `host`, `docker`, and `macos-vm` are treated as schemas.
 
 If a job's `runs-on` matches none of the runner's labels, or sets no `runs-on` at all, it still runs: in `runner.default_image` where docker is available, on the host where it is not. Images maintained for this purpose are listed at [gitea/runner-images](https://gitea.com/gitea/runner-images).
 

@@ -67,6 +67,31 @@ func TestLoadDefault_DefaultsWorkdirCleanupAge(t *testing.T) {
 	assert.Equal(t, DefaultImage, cfg.Runner.DefaultImage)
 }
 
+func TestLoadDefault_MacOSVMDefaults(t *testing.T) {
+	cfg, err := LoadDefault("")
+	require.NoError(t, err)
+	assert.Equal(t, "runner-executor-macos", cfg.MacOSVM.ExecutorPath)
+	assert.Equal(t, "/Users/admin/runner", cfg.MacOSVM.WorkdirParent)
+	assert.Equal(t, 5*time.Minute, cfg.MacOSVM.BootTimeout)
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+macos_vm:
+  executor_path: /usr/local/bin/runner-executor-macos
+  workdir_parent: /Users/runner
+  cpu: 4
+  memory: 8192
+  boot_timeout: 3m
+`), 0o600))
+	cfg, err = LoadDefault(path)
+	require.NoError(t, err)
+	assert.Equal(t, "/usr/local/bin/runner-executor-macos", cfg.MacOSVM.ExecutorPath)
+	assert.Equal(t, "/Users/runner", cfg.MacOSVM.WorkdirParent)
+	assert.Equal(t, 4, cfg.MacOSVM.CPU)
+	assert.Equal(t, 8192, cfg.MacOSVM.Memory)
+	assert.Equal(t, 3*time.Minute, cfg.MacOSVM.BootTimeout)
+}
+
 func TestLoadDefault_HealthChecksAreOptIn(t *testing.T) {
 	cfg, err := LoadDefault("")
 	require.NoError(t, err)

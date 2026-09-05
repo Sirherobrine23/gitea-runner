@@ -79,9 +79,20 @@ type Config struct {
 	MaxParallel                       int           // max parallel jobs to run across all workflows (0 = no limit, uses CPU count)
 	AllocatePTY                       bool          // allocate a pseudo-TTY for each step's process
 	ServiceReadyTimeout               time.Duration // how long a job waits for its service containers to report healthy (0 uses the default)
+	RunnerUUID                        string        // UUID this runner registered with, used to identify its macOS VMs
 	RunnerName                        string        // name this runner registered with, reported as `runner.name`, defaults to the hostname
 	JobStartedHook                    string        // script run inside the job environment before the job's first step; ACTIONS_RUNNER_HOOK_JOB_STARTED is read from Env when empty
 	JobCompletedHook                  string        // script run inside the job environment after the job's last step; ACTIONS_RUNNER_HOOK_JOB_COMPLETED is read from Env when empty
+	MacOSVM                           MacOSVMConfig // configures the macOS VM executor
+}
+
+// MacOSVMConfig contains the macOS VM executor settings that come from the runner config.
+type MacOSVMConfig struct {
+	ExecutorPath  string        // path to the runner-executor-macos binary
+	WorkdirParent string        // guest directory under which the job workspace is created
+	CPU           int           // number of virtual CPUs, 0 keeps the image default
+	Memory        int           // VM memory in megabytes, 0 keeps the image default
+	BootTimeout   time.Duration // how long to wait for the VM to become ready
 }
 
 // RunnerDebug reports whether debug logging is on, exposed as `runner.debug` and

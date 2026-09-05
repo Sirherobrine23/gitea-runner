@@ -92,7 +92,8 @@ runner:
   # at the price of the stock artifact actions refusing and the cache client keeping to v1.
   #patch_actions: true
   # The labels of a runner are used to determine which jobs the runner can run, and how to run them.
-  # Like: "macos-arm64:host" or "ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest"
+  # Like: "macos-arm64:host", "ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest",
+  # or "macos-latest:macos-vm://ghcr.io/cirruslabs/macos-sonoma-base:latest"
   # Find more images provided by Gitea at https://gitea.com/gitea/runner-images .
   # If it's empty when registering, it will ask for inputting labels.
   # If it's empty when execute `daemon`, will use labels in `.runner` file.
@@ -270,6 +271,19 @@ host:
   # The parent directory of a job's working directory.
   # If it's empty, $HOME/.cache/act/ will be used.
   #workdir_parent:
+
+macos_vm:
+  # Path to the runner-executor-macos binary. Empty uses PATH lookup.
+  #executor_path: runner-executor-macos
+  # The guest directory under which the job workspace is created. The VM must run
+  # as a user that can write there.
+  #workdir_parent: /Users/admin/runner
+  # Number of virtual CPUs. Omit or set to 0 to keep the image default.
+  #cpu: 0
+  # VM memory in megabytes. Omit or set to 0 to keep the image default.
+  #memory: 0
+  # How long to wait for the VM to become ready after it starts.
+  #boot_timeout: 5m
 
 # Optional local task-admission checks. Disabled by default. When enabled, low
 # disk space or a failing script pauses new task fetching; existing jobs continue.

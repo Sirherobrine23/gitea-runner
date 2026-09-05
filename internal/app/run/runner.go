@@ -144,6 +144,9 @@ func (r *Runner) Close() error {
 // removeOrphanNetworks is a variable so tests can substitute one that needs no Docker daemon.
 var removeOrphanNetworks = container.RemoveOrphanNetworks
 
+// removeOrphanMacOSVMs is a variable so tests can substitute one that needs no macOS VM executor.
+var removeOrphanMacOSVMs = container.CleanupOrphanMacOSVMs
+
 // OnIdle performs lightweight maintenance during polling idle windows.
 // It runs synchronously on the poller goroutine; shouldRunIdleCleanup
 // throttles invocations to runner.idle_cleanup_interval so the impact on
@@ -166,6 +169,7 @@ func (r *Runner) OnIdle(ctx context.Context) {
 		r.cleanupStaleDirs(ctx, hostRoot, isHostScratchDir)
 	}
 	r.cleanupOrphanNetworks(ctx)
+	r.cleanupOrphanMacOSVMs(ctx)
 }
 
 // cleanupOrphanNetworks reclaims the per-job networks of jobs this runner did not live to
@@ -179,6 +183,16 @@ func (r *Runner) cleanupOrphanNetworks(ctx context.Context) {
 	cutoff := r.now().Add(-r.cfg.Runner.WorkdirCleanupAge)
 	if err := removeOrphanNetworks(ctx, r.uuid, cutoff); err != nil {
 		log.Warnf("failed to clean up networks left behind by earlier jobs: %v", err)
+	}
+}
+
+func (r *Runner) cleanupOrphanMacOSVMs(ctx context.Context) {
+	if r.uuid == "" || !r.labels.RequireMacOSVM() || r.cfg.Runner.WorkdirCleanupAge <= 0 {
+		return
+	}
+	cutoff := r.now().Add(-r.cfg.Runner.WorkdirCleanupAge)
+	if err := removeOrphanMacOSVMs(ctx, r.cfg.MacOSVM.ExecutorPath, r.uuid, cutoff); err != nil {
+		log.Warnf("failed to clean up macOS VMs left behind by earlier jobs: %v", err)
 	}
 }
 
@@ -548,8 +562,16 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		Vars:                              task.Vars,
 		ValidVolumes:                      r.cfg.Container.ValidVolumes,
 		SharedToolCache:                   r.cfg.Runner.ToolCacheMode == config.ToolCacheModeShared,
-		InsecureSkipTLS:                   r.cfg.Runner.Insecure,
-		RunnerName:                        r.name,
+		MacOSVM: runner.MacOSVMConfig{
+			ExecutorPath:  r.cfg.MacOSVM.ExecutorPath,
+			WorkdirParent: r.cfg.MacOSVM.WorkdirParent,
+			CPU:           r.cfg.MacOSVM.CPU,
+			Memory:        r.cfg.MacOSVM.Memory,
+			BootTimeout:   r.cfg.MacOSVM.BootTimeout,
+		},
+		InsecureSkipTLS: r.cfg.Runner.Insecure,
+		RunnerUUID:      r.uuid,
+		RunnerName:      r.name,
 	}
 
 	rr, err := runner.New(runnerConfig)

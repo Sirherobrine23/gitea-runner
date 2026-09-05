@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gitea.com/gitea/runner/internal/pkg/config"
+	"gitea.com/gitea/runner/internal/pkg/labels"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -329,5 +330,39 @@ func TestRunnerOnIdleRemovesOrphanNetworks(t *testing.T) {
 	// a host-only runner has no daemon to sweep
 	hostOnly := &Runner{uuid: "runner-2", cfg: &config.Config{Runner: cfg.Runner}, now: func() time.Time { return now }}
 	hostOnly.OnIdle(context.Background())
+	assert.Equal(t, []string{"runner-1"}, swept)
+}
+
+func TestRunnerOnIdleRemovesOrphanMacOSVMs(t *testing.T) {
+	now := time.Date(2026, time.April, 29, 20, 0, 0, 0, time.UTC)
+	cfg := &config.Config{
+		Runner: config.Runner{
+			WorkdirCleanupAge:   24 * time.Hour,
+			IdleCleanupInterval: time.Minute,
+		},
+	}
+	macOSVMLabel, err := labels.Parse("macos-latest:macos-vm://ghcr.io/cirruslabs/macos-sonoma-base:latest")
+	require.NoError(t, err)
+
+	var swept []string
+	var sweptCutoff time.Time
+	origRemoveOrphanMacOSVMs := removeOrphanMacOSVMs
+	removeOrphanMacOSVMs = func(_ context.Context, _, runnerUUID string, accessedBefore time.Time) error {
+		swept = append(swept, runnerUUID)
+		sweptCutoff = accessedBefore
+		return nil
+	}
+	t.Cleanup(func() { removeOrphanMacOSVMs = origRemoveOrphanMacOSVMs })
+
+	r := &Runner{uuid: "runner-1", cfg: cfg, labels: labels.Labels{macOSVMLabel}, now: func() time.Time { return now }}
+	r.OnIdle(context.Background())
+	assert.Equal(t, []string{"runner-1"}, swept)
+	assert.Equal(t, now.Add(-24*time.Hour), sweptCutoff)
+
+	// a docker-only runner has no macOS VMs to sweep
+	dockerLabel, err := labels.Parse("ubuntu:docker://node:18")
+	require.NoError(t, err)
+	dockerOnly := &Runner{uuid: "runner-2", cfg: &config.Config{Runner: cfg.Runner}, labels: labels.Labels{dockerLabel}, now: func() time.Time { return now }}
+	dockerOnly.OnIdle(context.Background())
 	assert.Equal(t, []string{"runner-1"}, swept)
 }

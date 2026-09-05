@@ -17,6 +17,7 @@ import (
 	"io"
 	maps0 "maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -28,6 +29,7 @@ import (
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container"
 	"gitea.com/gitea/runner/act/ghcontext"
+	"gitea.com/gitea/runner/internal/pkg/labels"
 	"gitea.com/gitea/runner/internal/pkg/lock"
 
 	"gitea.dev/actionslib/pkg/exprparser"
@@ -422,6 +424,112 @@ func (rc *RunContext) startHostEnvironment() common.Executor {
 			}),
 		)(ctx)
 	}
+}
+
+// printStartMacOSVMGroup mirrors the "Starting job container" section for macOS VMs.
+func printStartMacOSVMGroup(ctx context.Context, image, name string) func() {
+	rawLogger := common.Logger(ctx).WithField(rawOutputField, true)
+	rawLogger.Infof("::group::Starting job VM")
+	rawLogger.Infof("image: %s", image)
+	rawLogger.Infof("name: %s", name)
+	return func() {
+		rawLogger.Infof("::endgroup::")
+	}
+}
+
+func (rc *RunContext) startMacOSVMEnvironment() common.Executor {
+	return func(ctx context.Context) error {
+		if len(rc.Run.Job().Services) > 0 {
+			return errors.New("service containers are not supported with the macOS VM executor; see docs/macos-vm-executor.md")
+		}
+
+		image := rc.macOSVMImage()
+		logWriter := rc.commandLogWriter(ctx)
+		name := rc.macOSVMName()
+		rc.Env["JOB_CONTAINER_NAME"] = name
+
+		guestWorkdir := rc.macOSVMGuestWorkdir()
+		scratch := path.Join("/", rc.macOSVMWorkdirParent(), "scratch", name)
+		actPath := path.Join(scratch, "act")
+		tmpDir := path.Join(scratch, "tmp")
+		toolCache := rc.toolCache(path.Join(scratch, "tool_cache"))
+
+		jobContainer, err := container.NewMacOSVMEnvironment(container.MacOSVMEnvironmentInput{
+			Path:         scratch,
+			TmpDir:       tmpDir,
+			ToolCache:    toolCache,
+			Workdir:      rc.Config.Workdir,
+			GuestWorkdir: guestWorkdir,
+			ActPath:      actPath,
+			Image:        image,
+			VMName:       name,
+			ExecutorPath: rc.Config.MacOSVM.ExecutorPath,
+			CPU:          rc.Config.MacOSVM.CPU,
+			Memory:       rc.Config.MacOSVM.Memory,
+			BootTimeout:  rc.Config.MacOSVM.BootTimeout,
+			Stdout:       logWriter,
+			Stderr:       logWriter,
+		})
+		if err != nil {
+			return err
+		}
+		rc.JobContainer = jobContainer
+		rc.cleanUpJobContainer = jobContainer.Remove()
+
+		for k, v := range rc.getRunnerContext(ctx) {
+			if v, ok := v.(string); ok {
+				rc.Env["RUNNER_"+strings.ToUpper(k)] = v
+			}
+		}
+		for _, env := range os.Environ() {
+			if k, v, ok := strings.Cut(env, "="); ok {
+				if _, ok := rc.Env[k]; !ok {
+					rc.Env[k] = v
+				}
+			}
+		}
+
+		defer printStartMacOSVMGroup(ctx, image, name)()
+		return common.NewPipelineExecutor(
+			jobContainer.Pull(rc.Config.ForcePull),
+			jobContainer.Create(nil, nil),
+			jobContainer.Start(false),
+			rc.captureJobContainerInfo(),
+			jobContainer.Copy(jobContainer.GetActPath()+"/", &container.FileEntry{
+				Name: "workflow/event.json",
+				Mode: 0o644,
+				Body: rc.EventJSON,
+			}, &container.FileEntry{
+				Name: "workflow/envs.txt",
+				Mode: 0o666,
+				Body: "",
+			}),
+		)(ctx)
+	}
+}
+
+func (rc *RunContext) macOSVMImage() string {
+	return strings.TrimPrefix(rc.platformImage, labels.MacOSVMSchemePrefix)
+}
+
+func (rc *RunContext) macOSVMName() string {
+	nameParts := []string{"GITEA-MACOS-VM", rc.Config.RunnerUUID, rc.Config.ContainerNamePrefix, "WORKFLOW-" + rc.Run.Workflow.Name, "JOB-" + rc.Run.JobID, rc.Name}
+	if rc.caller != nil {
+		nameParts = append(nameParts, "CALLED-BY-"+rc.caller.runContext.JobName)
+	}
+	return createContainerName(nameParts...)
+}
+
+func (rc *RunContext) macOSVMGuestWorkdir() string {
+	rel := strings.TrimLeft(filepath.ToSlash(rc.Config.Workdir), "/")
+	return path.Join("/", rc.macOSVMWorkdirParent(), rel)
+}
+
+func (rc *RunContext) macOSVMWorkdirParent() string {
+	if rc.Config.MacOSVM.WorkdirParent != "" {
+		return rc.Config.MacOSVM.WorkdirParent
+	}
+	return "/Users/admin/runner"
 }
 
 // printStartJobContainerGroup mirrors actions/runner's "Starting job container"
@@ -980,9 +1088,12 @@ func (rc *RunContext) interpolateOutputs() common.Executor {
 func (rc *RunContext) startContainer() common.Executor {
 	return func(ctx context.Context) error {
 		var err error
-		if rc.IsHostEnv() {
+		switch {
+		case rc.IsHostEnv():
 			err = rc.startHostEnvironment()(ctx)
-		} else {
+		case rc.IsMacOSVMEnv():
+			err = rc.startMacOSVMEnvironment()(ctx)
+		default:
 			err = rc.startJobContainer()(ctx)
 		}
 		if err != nil {
@@ -1012,6 +1123,11 @@ func (rc *RunContext) cleanupFailedStart(ctx context.Context) {
 
 func (rc *RunContext) IsHostEnv() bool {
 	return strings.EqualFold(rc.platformImage, "-self-hosted")
+}
+
+// IsMacOSVMEnv reports whether the resolved platform image requests a macOS VM.
+func (rc *RunContext) IsMacOSVMEnv() bool {
+	return strings.HasPrefix(rc.platformImage, labels.MacOSVMSchemePrefix)
 }
 
 func (rc *RunContext) stopContainer() common.Executor {

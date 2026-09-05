@@ -9,11 +9,15 @@ import (
 )
 
 const (
-	SchemeHost   = "host"
-	SchemeDocker = "docker"
+	SchemeHost    = "host"
+	SchemeDocker  = "docker"
+	SchemeMacOSVM = "macos-vm"
 
 	// SelfHostedPlatform is the platform marker act treats as "run on the host".
 	SelfHostedPlatform = "-self-hosted"
+
+	// MacOSVMSchemePrefix marks a platform image that act should run in a macOS VM.
+	MacOSVMSchemePrefix = "macos-vm://"
 )
 
 type Label struct {
@@ -42,7 +46,7 @@ func Parse(str string) (*Label, error) {
 	if len(splits) >= 3 {
 		label.Arg = splits[2]
 	}
-	if label.Schema != SchemeHost && label.Schema != SchemeDocker {
+	if label.Schema != SchemeHost && label.Schema != SchemeDocker && label.Schema != SchemeMacOSVM {
 		// Not a schema we know: the colon belongs to the label name itself.
 		return &Label{
 			Name:   str,
@@ -64,6 +68,15 @@ func (l Labels) RequireDocker() bool {
 	return false
 }
 
+func (l Labels) RequireMacOSVM() bool {
+	for _, label := range l {
+		if label.Schema == SchemeMacOSVM {
+			return true
+		}
+	}
+	return false
+}
+
 // PickPlatform returns the platform of the first runs-on entry this runner has a label for, or "".
 func (l Labels) PickPlatform(runsOn []string) string {
 	platforms := make(map[string]string, len(l))
@@ -72,10 +85,12 @@ func (l Labels) PickPlatform(runsOn []string) string {
 		case SchemeDocker:
 			// "//" will be ignored
 			platforms[label.Name] = strings.TrimPrefix(label.Arg, "//")
+		case SchemeMacOSVM:
+			platforms[label.Name] = MacOSVMSchemePrefix + strings.TrimPrefix(label.Arg, "//")
 		case SchemeHost:
 			platforms[label.Name] = SelfHostedPlatform
 		default:
-			// unreachable: Parse only produces host or docker schemas
+			// unreachable: Parse only produces host, docker, or macOS VM schemas
 			continue
 		}
 	}

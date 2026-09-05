@@ -179,6 +179,15 @@ type Host struct {
 	WorkdirParent string `yaml:"workdir_parent"` // WorkdirParent specifies the parent directory for the host's working directory.
 }
 
+// MacOSVM represents the configuration for the macOS VM executor.
+type MacOSVM struct {
+	ExecutorPath  string        `yaml:"executor_path"`  // ExecutorPath is the runner-executor-macos binary to invoke.
+	WorkdirParent string        `yaml:"workdir_parent"` // WorkdirParent is the guest directory under which the job workspace is created.
+	CPU           int           `yaml:"cpu"`            // CPU is the number of virtual CPUs. Zero keeps the image default.
+	Memory        int           `yaml:"memory"`         // Memory is the VM memory in megabytes. Zero keeps the image default.
+	BootTimeout   time.Duration `yaml:"boot_timeout"`   // BootTimeout bounds how long to wait for the VM to become ready.
+}
+
 // Metrics represents the configuration for the Prometheus metrics endpoint.
 type Metrics struct {
 	Enabled        bool          `yaml:"enabled"`         // Enabled indicates whether the metrics endpoint is exposed.
@@ -203,6 +212,7 @@ type Config struct {
 	Cache       Cache       `yaml:"cache"`        // Cache represents the configuration for caching.
 	Container   Container   `yaml:"container"`    // Container represents the configuration for the container.
 	Host        Host        `yaml:"host"`         // Host represents the configuration for the host.
+	MacOSVM     MacOSVM     `yaml:"macos_vm"`     // MacOSVM represents the configuration for the macOS VM executor.
 	Metrics     Metrics     `yaml:"metrics"`      // Metrics represents the configuration for the Prometheus metrics endpoint.
 	HealthCheck HealthCheck `yaml:"health_check"` // HealthCheck controls opt-in local task-admission checks.
 }
@@ -299,6 +309,15 @@ func LoadDefault(file string) (*Config, error) {
 			return nil, fmt.Errorf("host.workdir_parent is unset and the user home directory could not be determined: %w", err)
 		}
 		cfg.Host.WorkdirParent = filepath.Join(home, ".cache", "act")
+	}
+	if cfg.MacOSVM.ExecutorPath == "" {
+		cfg.MacOSVM.ExecutorPath = "runner-executor-macos"
+	}
+	if cfg.MacOSVM.WorkdirParent == "" {
+		cfg.MacOSVM.WorkdirParent = "/Users/admin/runner"
+	}
+	if cfg.MacOSVM.BootTimeout <= 0 {
+		cfg.MacOSVM.BootTimeout = 5 * time.Minute
 	}
 	if cfg.Runner.FetchTimeout <= 0 {
 		cfg.Runner.FetchTimeout = 5 * time.Second

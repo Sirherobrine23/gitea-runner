@@ -18,6 +18,7 @@ import (
 
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container"
+	"gitea.com/gitea/runner/internal/pkg/labels"
 
 	"gitea.dev/actionslib/pkg/exprparser"
 	"gitea.dev/actionslib/pkg/model"
@@ -1457,4 +1458,26 @@ func TestRunContextWithGithubEnvRunnerValues(t *testing.T) {
 	assert.Equal(t, "self-hosted", env["RUNNER_ENVIRONMENT"])
 	assert.Equal(t, "/workspace/owner", env["RUNNER_WORKSPACE"])
 	assert.Equal(t, "1", env["RUNNER_DEBUG"])
+}
+
+func TestRunContextMacOSVMPlatform(t *testing.T) {
+	rc := createRunsOnRunContext(t, "macos-latest")
+	rc.Config.PlatformPicker = func([]string) string {
+		return labels.MacOSVMSchemePrefix + "ghcr.io/cirruslabs/macos-sonoma-base:latest"
+	}
+	require.NoError(t, rc.resolvePlatformImage(t.Context()))
+
+	assert.True(t, rc.IsMacOSVMEnv())
+	assert.False(t, rc.IsHostEnv())
+	assert.Equal(t, "ghcr.io/cirruslabs/macos-sonoma-base:latest", rc.macOSVMImage())
+}
+
+func TestRunContextMacOSVMGuestWorkdir(t *testing.T) {
+	rc := createRunsOnRunContext(t, "macos-latest")
+	rc.Config.Workdir = "/workspace/owner/repo"
+	rc.Config.MacOSVM.WorkdirParent = "/Users/admin/runner"
+	rc.Config.RunnerUUID = "runner-1"
+
+	assert.Equal(t, "/Users/admin/runner/workspace/owner/repo", rc.macOSVMGuestWorkdir())
+	assert.Contains(t, rc.macOSVMName(), "GITEA-MACOS-VM-runner-1-")
 }

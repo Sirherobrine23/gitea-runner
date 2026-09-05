@@ -26,6 +26,15 @@ func TestParse(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			args: "macos-latest:macos-vm://ghcr.io/cirruslabs/macos-sonoma-base:latest",
+			want: &Label{
+				Name:   "macos-latest",
+				Schema: "macos-vm",
+				Arg:    "//ghcr.io/cirruslabs/macos-sonoma-base:latest",
+			},
+			wantErr: false,
+		},
+		{
 			args: "ubuntu:host",
 			want: &Label{
 				Name:   "ubuntu",
@@ -103,6 +112,7 @@ func TestRequireDocker(t *testing.T) {
 		{"empty", nil, false},
 		{"only host", []string{"ubuntu:host", "self-hosted"}, false},
 		{"has docker", []string{"ubuntu:host", "ubuntu:docker://node:18"}, true},
+		{"macos-vm does not require docker", []string{"macos-latest:macos-vm://ghcr.io/cirruslabs/macos-sonoma-base:latest"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -111,10 +121,29 @@ func TestRequireDocker(t *testing.T) {
 	}
 }
 
+func TestRequireMacOSVM(t *testing.T) {
+	tests := []struct {
+		name string
+		strs []string
+		want bool
+	}{
+		{"empty", nil, false},
+		{"only host", []string{"ubuntu:host", "self-hosted"}, false},
+		{"only docker", []string{"ubuntu:docker://node:18"}, false},
+		{"has macos-vm", []string{"macos-latest:macos-vm://ghcr.io/cirruslabs/macos-sonoma-base:latest"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, mustParse(t, tt.strs...).RequireMacOSVM())
+		})
+	}
+}
+
 func TestPickPlatform(t *testing.T) {
 	ls := mustParse(t,
 		"ubuntu:docker://node:18",
 		"self-hosted:host",
+		"macos-latest:macos-vm://ghcr.io/cirruslabs/macos-sonoma-base:latest",
 	)
 
 	tests := []struct {
@@ -124,6 +153,7 @@ func TestPickPlatform(t *testing.T) {
 	}{
 		{"docker strips leading slashes", []string{"ubuntu"}, "node:18"},
 		{"host maps to self-hosted marker", []string{"self-hosted"}, SelfHostedPlatform},
+		{"macos-vm prefixes platform marker", []string{"macos-latest"}, MacOSVMSchemePrefix + "ghcr.io/cirruslabs/macos-sonoma-base:latest"},
 		{"first match wins", []string{"self-hosted", "ubuntu"}, SelfHostedPlatform},
 		{"unknown label picks nothing", []string{"windows"}, ""},
 		{"no runsOn picks nothing", nil, ""},
@@ -145,12 +175,14 @@ func TestToStrings(t *testing.T) {
 	ls := mustParse(t,
 		"ubuntu:docker://node:18",
 		"self-hosted:host",
+		"macos-latest:macos-vm://ghcr.io/cirruslabs/macos-sonoma-base:latest",
 		"bare",
 		"pool:e57e18d4",
 	)
 	require.Equal(t, []string{
 		"ubuntu:docker://node:18",
 		"self-hosted:host",
+		"macos-latest:macos-vm://ghcr.io/cirruslabs/macos-sonoma-base:latest",
 		"bare:host",
 		"pool:e57e18d4",
 	}, ls.ToStrings())

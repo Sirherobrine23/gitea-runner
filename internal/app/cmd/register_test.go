@@ -62,6 +62,7 @@ func TestRegisterInputsValidate(t *testing.T) {
 
 func TestValidateLabels(t *testing.T) {
 	require.NoError(t, validateLabels([]string{"ubuntu:host", "ubuntu:docker://node:18"}))
+	require.NoError(t, validateLabels([]string{"macos-latest:macos-vm://ghcr.io/cirruslabs/macos-sonoma-base:latest"}))
 	// a colon that is not a supported schema is part of the label name
 	require.NoError(t, validateLabels([]string{"pool:e57e18d4-10d4-406f-93bf-60f127221bdd"}))
 	require.Error(t, validateLabels([]string{"ubuntu:host", ""}))
