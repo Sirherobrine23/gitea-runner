@@ -34,13 +34,17 @@ func TestMacOSVMEnvironmentIntegration(t *testing.T) {
 
 	ctx := context.Background()
 	vmName := fmt.Sprintf("gitea-runner-test-%d", time.Now().UnixNano())
+	base := "/Users/admin/runner"
+	if os.Getenv("RUNNER_EXECUTOR_MACOS_DEV_MODE") == "1" {
+		base = t.TempDir()
+	}
 	env, err := NewMacOSVMEnvironment(MacOSVMEnvironmentInput{
-		Path:         "/Users/admin/runner/scratch/" + vmName,
-		TmpDir:       "/Users/admin/runner/scratch/" + vmName + "/tmp",
-		ToolCache:    "/Users/admin/runner/scratch/" + vmName + "/tool_cache",
+		Path:         base + "/scratch/" + vmName,
+		TmpDir:       base + "/scratch/" + vmName + "/tmp",
+		ToolCache:    base + "/scratch/" + vmName + "/tool_cache",
 		Workdir:      t.TempDir(),
-		GuestWorkdir: "/Users/admin/runner/workspace/" + vmName,
-		ActPath:      "/Users/admin/runner/scratch/" + vmName + "/act",
+		GuestWorkdir: base + "/workspace/" + vmName,
+		ActPath:      base + "/scratch/" + vmName + "/act",
 		Image:        image,
 		VMName:       vmName,
 		ExecutorPath: "runner-executor-macos",
@@ -55,6 +59,7 @@ func TestMacOSVMEnvironmentIntegration(t *testing.T) {
 
 	require.NoError(t, env.Create(nil, nil)(ctx))
 	require.NoError(t, env.Start(false)(ctx))
+	require.NoError(t, os.MkdirAll(env.GuestWorkdir, 0o755))
 
 	require.NoError(t, env.Copy("/tmp", &FileEntry{
 		Name: "gitea-runner-macos.txt",

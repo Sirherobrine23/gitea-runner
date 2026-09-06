@@ -164,7 +164,7 @@ func (e *MacOSVMEnvironment) CopyDir(destPath, srcPath string, useGitIgnore bool
 			writeDone <- err
 		}()
 
-		script := `mkdir -p "$1" && /usr/bin/tar -xf - -C "$1"`
+		script := `export COPYFILE_DISABLE=1; mkdir -p "$1" && /usr/bin/tar -xf - -C "$1"`
 		cmdErr := e.runExecutor(ctx, pipeReader, e.Stdout, e.Stderr, "exec", "--stdin", e.VMName, "/bin/sh", "-c", script, "sh", destPath)
 		_ = pipeReader.Close()
 		writeErr := <-writeDone
@@ -203,7 +203,7 @@ func (e *MacOSVMEnvironment) GetContainerArchive(ctx context.Context, srcPath st
 	if common.Dryrun(ctx) {
 		return nil, errors.New("DRYRUN is not supported in GetContainerArchive")
 	}
-	cmd := exec.CommandContext(ctx, e.executorPath, "exec", e.VMName, "/usr/bin/tar", "-cf", "-", srcPath)
+	cmd := exec.CommandContext(ctx, e.executorPath, "exec", e.VMName, "/usr/bin/env", "COPYFILE_DISABLE=1", "/usr/bin/tar", "-cf", "-", srcPath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -277,7 +277,7 @@ func (e *MacOSVMEnvironment) waitReady(ctx context.Context) error {
 
 	var lastErr error
 	for {
-		if err := e.runExecutor(ctx, nil, io.Discard, io.Discard, "exec", e.VMName, "/bin/true"); err == nil {
+		if err := e.runExecutor(ctx, nil, io.Discard, io.Discard, "exec", e.VMName, "/usr/bin/true"); err == nil {
 			return nil
 		} else {
 			lastErr = err

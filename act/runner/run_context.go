@@ -494,6 +494,7 @@ func (rc *RunContext) startMacOSVMEnvironment() common.Executor {
 			jobContainer.Pull(rc.Config.ForcePull),
 			jobContainer.Create(nil, nil),
 			jobContainer.Start(false),
+			jobContainer.Exec([]string{"/bin/mkdir", "-p", guestWorkdir, actPath, tmpDir, toolCache}, nil, "", "/"),
 			rc.captureJobContainerInfo(),
 			jobContainer.Copy(jobContainer.GetActPath()+"/", &container.FileEntry{
 				Name: "workflow/event.json",
