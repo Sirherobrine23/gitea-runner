@@ -59,7 +59,10 @@ func TestMacOSVMEnvironmentIntegration(t *testing.T) {
 
 	require.NoError(t, env.Create(nil, nil)(ctx))
 	require.NoError(t, env.Start(false)(ctx))
-	require.NoError(t, os.MkdirAll(env.GuestWorkdir, 0o755))
+	if os.Getenv("RUNNER_EXECUTOR_MACOS_DEV_MODE") == "1" {
+		require.NoError(t, os.MkdirAll(env.GuestWorkdir, 0o755))
+	}
+	require.NoError(t, env.Exec([]string{"/bin/mkdir", "-p", env.GuestWorkdir}, nil, "", "/")(ctx))
 
 	require.NoError(t, env.Copy("/tmp", &FileEntry{
 		Name: "gitea-runner-macos.txt",
