@@ -203,7 +203,7 @@ func (e *MacOSVMEnvironment) GetContainerArchive(ctx context.Context, srcPath st
 	if common.Dryrun(ctx) {
 		return nil, errors.New("DRYRUN is not supported in GetContainerArchive")
 	}
-	cmd := exec.CommandContext(ctx, e.executorPath, "exec", e.VMName, "/usr/bin/env", "COPYFILE_DISABLE=1", "/usr/bin/tar", "-cf", "-", srcPath)
+	cmd := exec.CommandContext(ctx, e.executorPath, "exec", e.VMName, "/usr/bin/env", "COPYFILE_DISABLE=1", "/usr/bin/tar", "-cf", "-", "-C", "/", strings.TrimPrefix(srcPath, "/"))
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
