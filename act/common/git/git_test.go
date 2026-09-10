@@ -6,7 +6,6 @@ package git
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -524,30 +523,51 @@ func TestGitCloneExecutorShallow(t *testing.T) {
 	})
 }
 
-func TestGitCloneExecutorColdCloneSkipsRefresh(t *testing.T) {
-	remoteDir := t.TempDir()
-	require.NoError(t, gitCmd("init", "--bare", "--initial-branch=main", remoteDir))
+func TestGitCloneExecutorTransportSessions(t *testing.T) {
 	workDir := t.TempDir()
-	require.NoError(t, gitCmd("clone", remoteDir, workDir))
-	require.NoError(t, gitCmd("-C", workDir, "checkout", "-b", "main"))
+	require.NoError(t, gitCmd("init", "--initial-branch=main", workDir))
 	require.NoError(t, gitCmd("-C", workDir, "commit", "--allow-empty", "-m", "c1"))
 	require.NoError(t, gitCmd("-C", workDir, "tag", "v1"))
-	require.NoError(t, gitCmd("-C", workDir, "push", "-u", "origin", "main"))
-	require.NoError(t, gitCmd("-C", workDir, "push", "origin", "v1"))
+	require.NoError(t, gitCmd("-C", workDir, "tag", "-a", "v2", "-m", "v2"))
 
 	for name, tt := range map[string]struct {
 		Ref   string
 		Depth int
 	}{
-		"shallow branch": {"main", 1},
-		"full clone tag": {"v1", 0},
+		"shallow branch":       {"main", 1},
+		"full clone branch":    {"main", 0},
+		"full lightweight tag": {"v1", 0},
+		"full annotated tag":   {"v2", 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			counter := installCountingTransport(t)
-			require.NoError(t, NewGitCloneExecutor(NewGitCloneExecutorInput{
-				URL: remoteDir, Ref: tt.Ref, Dir: t.TempDir(), Depth: tt.Depth,
-			})(t.Context()))
-			assert.Equal(t, int64(1), counter.sessions.Load())
+			dir := t.TempDir()
+			clone := NewGitCloneExecutor(NewGitCloneExecutorInput{
+				URL: workDir, Ref: tt.Ref, Dir: dir, Depth: tt.Depth,
+			})
+			require.NoError(t, clone(t.Context()))
+			assert.Equal(t, int64(1), counter.sessions.Swap(0), "cold clone")
+			assert.Equal(t, gitRevParse(t, workDir, tt.Ref+"^{commit}"), gitRevParse(t, dir, "HEAD"))
+
+			require.NoError(t, clone(t.Context()))
+			assert.Equal(t, int64(1), counter.sessions.Swap(0), "unchanged warm cache")
+
+			require.NoError(t, os.WriteFile(filepath.Join(workDir, "action.yml"), []byte(name), 0o644))
+			require.NoError(t, gitCmd("-C", workDir, "add", "action.yml"))
+			require.NoError(t, gitCmd("-C", workDir, "commit", "-m", name))
+			require.NoError(t, gitCmd("-C", workDir, "tag", "--force", "v1"))
+			require.NoError(t, gitCmd("-C", workDir, "tag", "--force", "-a", "v2", "-m", "v2"))
+
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "action.yml"), []byte("staged"), 0o644))
+			require.NoError(t, gitCmd("-C", dir, "add", "action.yml"))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "action.yml"), []byte("unstaged"), 0o644))
+
+			require.NoError(t, clone(t.Context()))
+			assert.Equal(t, int64(1), counter.sessions.Load(), "updated warm cache")
+			assert.Equal(t, gitRevParse(t, workDir, "HEAD"), gitRevParse(t, dir, "HEAD"))
+			status, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+			require.NoError(t, err)
+			assert.Empty(t, string(status))
 		})
 	}
 }
@@ -735,13 +755,4 @@ func TestNewGitCloneExecutorFetchHonoursContext(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("fetch ignored context cancellation")
 	}
-}
-
-func TestStaleRefreshErr(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	require.NoError(t, staleRefreshErr(ctx, errors.New("remote hung up")))
-
-	cancel()
-	require.ErrorIs(t, staleRefreshErr(ctx, errors.New("remote hung up")), context.Canceled)
-	require.NoError(t, staleRefreshErr(ctx, gogit.NoErrAlreadyUpToDate))
 }

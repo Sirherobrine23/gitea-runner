@@ -89,3 +89,11 @@ func NewDockerNetworkRemoveExecutor(name string) common.Executor {
 func RemoveOrphanNetworks(ctx context.Context, runnerUUID string, createdBefore time.Time) error {
 	return nil
 }
+
+func CreateJobVolumes(ctx context.Context, runnerUUID string, volumeNames []string) error {
+	return nil
+}
+
+func RemoveOrphanJobVolumes(ctx context.Context, runnerUUID string, createdBefore time.Time) error {
+	return nil
+}

@@ -146,6 +146,8 @@ func (r *Runner) Close() error {
 // removeOrphanNetworks is a variable so tests can substitute one that needs no Docker daemon.
 var removeOrphanNetworks = container.RemoveOrphanNetworks
 
+var removeOrphanJobVolumes = container.RemoveOrphanJobVolumes
+
 // OnIdle performs lightweight maintenance during polling idle windows.
 // It runs synchronously on the poller goroutine; shouldRunIdleCleanup
 // throttles invocations to runner.idle_cleanup_interval so the impact on
@@ -167,20 +169,19 @@ func (r *Runner) OnIdle(ctx context.Context) {
 	if hostRoot := filepath.FromSlash(r.cfg.Host.WorkdirParent); hostRoot != "" {
 		r.cleanupStaleDirs(ctx, hostRoot, isHostScratchDir)
 	}
-	r.cleanupOrphanNetworks(ctx)
+	r.cleanupOrphanDockerResources(ctx)
 }
 
-// cleanupOrphanNetworks reclaims the per-job networks of jobs this runner did not live to
-// tear down. A labelled network with no containers on it is finished with, and as for the
-// directories above, a task beginning during the pass is safe because the cutoff keeps a
-// network it has created but not yet attached a container to out of scope.
-func (r *Runner) cleanupOrphanNetworks(ctx context.Context) {
-	if r.uuid == "" || !r.requiresDocker() {
+func (r *Runner) cleanupOrphanDockerResources(ctx context.Context) {
+	if r.uuid == "" || (!r.requiresDocker() && !dockerReachable(ctx)) {
 		return
 	}
 	cutoff := r.now().Add(-r.cfg.Runner.WorkdirCleanupAge)
 	if err := removeOrphanNetworks(ctx, r.uuid, cutoff); err != nil {
 		log.Warnf("failed to clean up networks left behind by earlier jobs: %v", err)
+	}
+	if err := removeOrphanJobVolumes(ctx, r.uuid, cutoff); err != nil {
+		log.Warnf("failed to clean up volumes left behind by earlier jobs: %v", err)
 	}
 }
 
@@ -287,6 +288,7 @@ func (r *Runner) Run(ctx context.Context, task *runnerv1.Task) error {
 	defer r.runningTasks.Delete(task.Id)
 
 	r.runningCount.Add(1)
+	defer r.runningCount.Add(-1)
 
 	start := time.Now()
 
@@ -294,15 +296,25 @@ func (r *Runner) Run(ctx context.Context, task *runnerv1.Task) error {
 	defer cancel()
 	// A proxy URL may carry credentials, and every job is given it; keep them out of the log.
 	reporter := report.NewReporter(ctx, cancel, r.client, task, r.cfg, proxyPasswords()...)
+	var volumeCleanup []common.Executor
+	var volumeCleanupMu sync.Mutex
+	if r.cfg.Runner.PostTaskScript == "" {
+		ctx = runner.WithJobVolumeCleanup(ctx, func(cleanup common.Executor) {
+			volumeCleanupMu.Lock()
+			defer volumeCleanupMu.Unlock()
+			volumeCleanup = append(volumeCleanup, cleanup)
+		})
+	}
 	var runErr error
 	defer func() {
-		r.runningCount.Add(-1)
-
 		lastWords := ""
 		if runErr != nil {
 			lastWords = runErr.Error()
 		}
 		_ = reporter.Close(lastWords)
+		if err := cleanupJobVolumes(ctx, volumeCleanup); err != nil {
+			log.Warnf("task %d volume cleanup after reporting: %v", task.Id, err)
+		}
 
 		metrics.JobDuration.Observe(time.Since(start).Seconds())
 		metrics.JobsTotal.WithLabelValues(metrics.ResultToStatusLabel(reporter.Result())).Inc()
@@ -311,6 +323,16 @@ func (r *Runner) Run(ctx context.Context, task *runnerv1.Task) error {
 	runErr = r.run(ctx, task, reporter)
 
 	return nil
+}
+
+func cleanupJobVolumes(ctx context.Context, cleanups []common.Executor) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	var errs []error
+	for _, cleanup := range cleanups {
+		errs = append(errs, cleanup(ctx))
+	}
+	return errors.Join(errs...)
 }
 
 func (r *Runner) cloneEnvs() map[string]string {

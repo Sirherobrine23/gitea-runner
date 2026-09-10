@@ -7,15 +7,21 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"gitea.com/gitea/runner/act/common"
@@ -24,6 +30,7 @@ import (
 	"gitea.dev/actionslib/pkg/exprparser"
 	"gitea.dev/actionslib/pkg/model"
 	"github.com/docker/cli/cli/compose/loader"
+	"github.com/moby/moby/api/types/volume"
 	log "github.com/sirupsen/logrus"
 	assert "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -240,8 +247,20 @@ func (fakeContainer) Inspect(context.Context) (*container.Info, error) {
 
 func (fakeContainer) DumpLogs(context.Context) error { return nil }
 
-// startJobContainerInputs runs startJobContainer against fakeContainer and returns the
-// inputs it built, one per container.
+func fakeDockerDaemon(t *testing.T, handler http.HandlerFunc) {
+	t.Helper()
+	daemon := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(request.URL.Path, "/_ping") {
+			writer.Header().Set("API-Version", "1.47")
+		} else {
+			handler(writer, request)
+		}
+	}))
+	t.Cleanup(daemon.Close)
+	t.Setenv("DOCKER_HOST", daemon.URL)
+}
+
 func startJobContainerInputs(t *testing.T, workflowYAML string, cfg *Config) []*container.NewContainerInput {
 	t.Helper()
 	workflow, err := model.ReadWorkflow(strings.NewReader(workflowYAML))
@@ -282,6 +301,8 @@ func startJobContainerInputs(t *testing.T, workflowYAML string, cfg *Config) []*
 			_, _ = io.WriteString(w, "[]")
 		case strings.HasSuffix(r.URL.Path, "/volumes"):
 			_, _ = io.WriteString(w, `{"Volumes":[]}`)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/volumes/"):
+			w.WriteHeader(http.StatusNoContent)
 		case strings.HasSuffix(r.URL.Path, "/info"):
 			_, _ = io.WriteString(w, `{"Architecture":"amd64","OSType":"linux"}`)
 		default:
@@ -647,39 +668,142 @@ func TestCleanupJobResourcesCleansServicesWithoutJobContainer(t *testing.T) {
 		serviceContainers: []*serviceContainer{{name: "svc", container: service}},
 	}
 
-	err := rc.cleanupJobResources("external-network", false)(common.WithDryrun(t.Context(), true))
+	err := rc.cleanupJobResources("external-network", false, true)(common.WithDryrun(t.Context(), true))
 	require.NoError(t, err)
 	service.AssertExpectations(t)
 }
 
-// cleanup used to bail out on a previous step's error and on a cancelled context
-func TestCleanupJobResourcesContinuesAfterFailure(t *testing.T) {
-	t.Setenv("DOCKER_HOST", "unix:///nonexistent.sock")
-
-	removeError, closeError := errors.New("remove service"), errors.New("close service")
-	jobContainer := &containerMock{}
-	jobContainer.On("Remove").Return(func(context.Context) error { return errors.New("removal failed") }).Once()
-	service := &containerMock{}
-	service.On("Remove").Return(func(context.Context) error { return removeError }).Once()
-	service.On("Close").Return(func(context.Context) error { return closeError }).Once()
-
+func TestCleanupJobVolumesReapsAbandonedDeferredCleanup(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 12, 0, 0, 0, time.UTC)
 	rc := &RunContext{
-		Name:              "job",
-		Config:            &Config{},
-		Run:               &model.Run{Workflow: &model.Workflow{Name: "wf"}, JobID: "job"},
-		JobContainer:      jobContainer,
-		serviceContainers: []*serviceContainer{{name: "svc", container: service}},
+		Config:       &Config{ContainerNetworkCreateOptions: container.NewDockerNetworkCreateExecutorInput{RunnerUUID: "runner-1"}},
+		Run:          &model.Run{Workflow: &model.Workflow{Name: "workflow"}, JobID: "job"},
+		JobContainer: fakeContainer{},
 	}
+	volumes := map[string]volume.Volume{}
+	fakeDockerDaemon(t, func(writer http.ResponseWriter, request *http.Request) {
+		path := strings.TrimPrefix(request.URL.Path, "/v1.47")
+		switch {
+		case path == "/volumes/create":
+			options := volume.Volume{CreatedAt: now.Format(time.RFC3339)}
+			assert.NoError(t, json.UnmarshalRead(request.Body, &options))
+			volumes[options.Name] = options
+			assert.NoError(t, json.MarshalWrite(writer, volumes[options.Name]))
+		case path == "/volumes":
+			assert.JSONEq(t, `{"label":{"com.gitea.runner.uuid=runner-1":true},"dangling":{"true":true}}`, request.URL.Query().Get("filters"))
+			assert.NoError(t, json.MarshalWrite(writer, map[string]any{"Volumes": slices.Collect(maps.Values(volumes))}))
+		case request.Method == http.MethodDelete:
+			name := strings.TrimPrefix(path, "/volumes/")
+			assert.NotContains(t, []string{"1", "true"}, request.URL.Query().Get("force"))
+			if name == "became-active" || name == "remove-failed" {
+				writer.WriteHeader(http.StatusConflict)
+				_, _ = fmt.Fprintf(writer, `{"message":%q}`, name)
+				return
+			}
+			delete(volumes, name)
+			writer.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", request.Method, request.URL)
+		}
+	})
+	name := rc.jobContainerName()
+	require.NoError(t, rc.createJobVolumes(t.Context(), map[string]string{name: "/workspace", name + "-env": "/var/run/act", "shared-cache": "/cache"}))
+	assert.ElementsMatch(t, []string{name, name + "-env"}, slices.Collect(maps.Keys(volumes)))
+	rc.deferVolumeCleanup = func(common.Executor) {}
+	require.NoError(t, rc.cleanupJobResources("", false, false)(t.Context()))
+	require.Len(t, volumes, 2)
+	for _, name := range []string{"became-active", "remove-failed"} {
+		volumes[name] = volume.Volume{Name: name, Labels: volumes[rc.jobContainerName()].Labels, CreatedAt: now.Format(time.RFC3339)}
+	}
+	volumes["foreign"] = volume.Volume{Name: "foreign", Labels: map[string]string{"com.gitea.runner.uuid": "runner-2"}, CreatedAt: now.Format(time.RFC3339)}
+	volumes["fresh"] = volume.Volume{Name: "fresh", Labels: volumes[name].Labels, CreatedAt: now.Add(48 * time.Hour).Format(time.RFC3339)}
+	volumes["unknown-age"] = volume.Volume{Name: "unknown-age", Labels: volumes[name].Labels}
+	err := container.RemoveOrphanJobVolumes(t.Context(), "runner-1", now.Add(24*time.Hour))
+	require.ErrorContains(t, err, "became-active")
+	require.ErrorContains(t, err, "remove-failed")
+	assert.ElementsMatch(t, []string{"became-active", "remove-failed", "foreign", "fresh", "unknown-age"}, slices.Collect(maps.Keys(volumes)))
+}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	err := rc.cleanupJobResources("job-network", true)(ctx)
-	require.ErrorContains(t, err, "removal failed")
-	require.ErrorIs(t, err, removeError)
-	require.ErrorIs(t, err, closeError)
-	require.ErrorIs(t, err, context.Canceled)
-	jobContainer.AssertExpectations(t)
-	service.AssertExpectations(t)
+func TestCleanupJobResourcesContinuesAfterFailure(t *testing.T) {
+	t.Setenv("TMPDIR", "/tmp")
+	proxyDir := t.TempDir()
+	for _, name := range []string{"synchronous", "proxy", "closed proxy", "deferred", "preclean deferred", "canceled"} {
+		t.Run(name, func(t *testing.T) {
+			proxy, preclean, deferred := strings.HasSuffix(name, "proxy"), strings.HasPrefix(name, "preclean"), strings.HasSuffix(name, "deferred")
+			if proxy && runtime.GOOS == "windows" {
+				t.Skip("Unix socket ownership is unavailable on Windows")
+			}
+			jobError, removeError, closeError := errors.New("remove job"), errors.New("remove service"), errors.New("close service")
+			job, service := &containerMock{}, &containerMock{}
+			job.On("Remove").Return(func(context.Context) error { return jobError }).Once()
+			service.On("Remove").Return(func(context.Context) error { return removeError }).Once()
+			service.On("Close").Return(func(context.Context) error { return closeError }).Once()
+			rc := &RunContext{
+				Config:            &Config{},
+				Run:               &model.Run{Workflow: &model.Workflow{Name: "wf"}, JobID: "job"},
+				JobContainer:      job,
+				serviceContainers: []*serviceContainer{{name: "svc", container: service}},
+			}
+			var volumeCleanup []common.Executor
+			if deferred {
+				rc.deferVolumeCleanup = func(cleanup common.Executor) { volumeCleanup = append(volumeCleanup, cleanup) }
+			}
+			volumeRemovals := 0
+			fakeDockerDaemon(t, func(writer http.ResponseWriter, request *http.Request) {
+				if request.Method == http.MethodDelete {
+					volumeRemovals++
+				}
+				operation := request.Method + " " + strings.TrimPrefix(request.URL.Path, "/v1.47")
+				if request.URL.Query().Has("filters") {
+					operation = "labelled " + operation
+				}
+				writer.WriteHeader(http.StatusInternalServerError)
+				_, _ = fmt.Fprintf(writer, `{"message":%q}`, operation)
+			})
+			if proxy {
+				listener, err := net.Listen("unix", filepath.Join(proxyDir, "d.sock"))
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, listener.Close()) })
+				rc.dockerProxy, err = container.StartDockerProxy(listener.Addr().String(), proxyDir, rc.jobContainerName())
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, rc.closeDockerProxy(context.Background())) })
+				if name == "closed proxy" {
+					require.NoError(t, rc.closeDockerProxy(t.Context()))
+				}
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if name == "canceled" {
+				cancel()
+			}
+			err := rc.cleanupJobResources("job-network", true, preclean)(ctx)
+			if deferred && !preclean {
+				require.Len(t, volumeCleanup, 1)
+				assert.Zero(t, volumeRemovals)
+				err = errors.Join(err, volumeCleanup[0](ctx))
+			} else {
+				assert.Empty(t, volumeCleanup)
+			}
+			for _, failure := range []error{jobError, removeError, closeError} {
+				require.ErrorIs(t, err, failure)
+			}
+			if name == "canceled" {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				for _, operation := range []string{"DELETE /volumes/" + rc.jobContainerName(), "DELETE /volumes/" + rc.jobContainerName() + "-env", "GET /networks"} {
+					require.ErrorContains(t, err, operation)
+				}
+				assert.Equal(t, 2, volumeRemovals)
+			}
+			assert.Equal(t, proxy || preclean, strings.Contains(err.Error(), "labelled GET /containers/json"))
+			if proxy || preclean {
+				require.ErrorContains(t, err, "labelled GET /networks")
+				require.ErrorContains(t, err, "labelled GET /volumes")
+			}
+			assert.Nil(t, rc.dockerProxy)
+			assert.Equal(t, proxy, rc.hadDockerProxy)
+		})
+	}
 }
 
 // TestInterpolateOutputsIsPerMatrixCombo guards the matrix-output fix: combinations share one
@@ -1089,65 +1213,96 @@ func TestRunContext_cleanupFailedStart(t *testing.T) {
 	type ctxKey string
 	const sentinel = ctxKey("sentinel")
 
-	// the fresh context is cancelled via defer on return, so capture state inside the stub
-	type capture struct {
-		calls    int
-		err      error
-		sentinel any
-		cancel   context.CancelFunc
-	}
-	newRC := func(c *capture) *RunContext {
-		return &RunContext{
-			JobName: "job",
-			cleanUpJobContainer: func(ctx context.Context) error {
-				c.calls++
-				if c.cancel != nil {
-					c.cancel()
-				}
+	for name, canceled := range map[string]bool{"cancellation during cleanup": false, "already canceled": true} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.WithValue(t.Context(), sentinel, "v"))
+			defer cancel()
+			if canceled {
+				cancel()
+			}
+			calls := 0
+			(&RunContext{cleanUpJobContainer: func(ctx context.Context) error {
+				calls++
+				cancel()
 				deadline, ok := ctx.Deadline()
 				require.True(t, ok)
 				assert.WithinDuration(t, time.Now().Add(time.Minute), deadline, time.Second)
-				c.err = ctx.Err()
-				c.sentinel = ctx.Value(sentinel)
+				require.NoError(t, ctx.Err())
+				assert.Equal(t, "v", ctx.Value(sentinel))
 				return nil
-			},
-		}
+			}}).cleanupFailedStart(ctx)
+			assert.Equal(t, 1, calls)
+		})
 	}
 
-	t.Run("detaches teardown from cancellation during cleanup", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.WithValue(context.Background(), sentinel, "v"))
-		defer cancel()
-		c := capture{cancel: cancel}
+	for _, testcase := range []struct {
+		name, health string
+		pullError    error
+	}{
+		{name: "healthy", health: container.HealthHealthy},
+		{name: "unhealthy", health: container.HealthUnhealthy},
+		{name: "pull failure", pullError: errors.New("pull failed")},
+	} {
+		t.Run(testcase.name, func(t *testing.T) {
+			var operations []string
+			record := func(operation string, failure error) func(context.Context) error {
+				return func(context.Context) error {
+					operations = append(operations, operation)
+					return failure
+				}
+			}
+			job, service := &containerMock{}, &containerMock{}
+			for name, instance := range map[string]*containerMock{"job": job, "service": service} {
+				instance.On("Pull", true).Return(record(name+".Pull", map[string]error{"job": testcase.pullError}[name]))
+				instance.On("Create", mock.Anything, mock.Anything).Return(record(name+".Create", nil))
+				instance.On("Start", false).Return(record(name+".Start", nil))
+				instance.On("Remove").Return(record(name+".Remove", nil))
+				instance.On("Close").Return(record(name+".Close", nil))
+			}
+			job.On("Copy", mock.Anything, mock.Anything).Return(record("job.Copy", nil))
+			job.On("Inspect", mock.Anything).Return(&container.Info{ID: "job-id"}, nil).
+				Run(func(mock.Arguments) { operations = append(operations, "job.Inspect") })
+			for _, health := range []string{container.HealthStarting, testcase.health} {
+				service.On("Inspect", mock.Anything).Return(&container.Info{State: "running", Health: health}, nil).
+					Run(func(mock.Arguments) { operations = append(operations, "service.Inspect") }).Once()
+			}
+			service.On("DumpLogs", mock.Anything).Return(nil).
+				Run(func(mock.Arguments) { operations = append(operations, "service.DumpLogs") })
+			origNewContainer := newContainer
+			newContainer = func(input *container.NewContainerInput) container.ExecutionsEnvironment {
+				return map[string]*containerMock{"postgres:latest": service, "node:20": job}[input.Image]
+			}
+			t.Cleanup(func() { newContainer = origNewContainer })
+			workflow, err := model.ReadWorkflow(strings.NewReader("jobs: {job: {services: {postgres: {image: postgres:latest}}}}"))
+			require.NoError(t, err)
+			rc := &RunContext{
+				Config:        &Config{ForcePull: true, ContainerNetworkMode: "host", Workdir: "/workspace"},
+				Run:           &model.Run{JobID: "job", Workflow: workflow},
+				platformImage: "node:20",
+			}
+			ctx := common.WithDryrun(t.Context(), true)
+			rc.ExprEval = rc.NewExpressionEvaluator(ctx)
+			err = rc.startContainer().Then(rc.stopContainer()).Finally(rc.closeContainer())(ctx)
+			want := "job.Remove service.Remove service.Close service.Pull job.Pull"
+			if testcase.pullError != nil {
+				require.ErrorIs(t, err, testcase.pullError)
+			} else {
+				want += " service.Create service.Start service.Inspect job.Create job.Start job.Inspect job.Copy service.Inspect"
+				if testcase.health == container.HealthUnhealthy {
+					require.ErrorContains(t, err, "the service 'postgres' is unhealthy")
+					want += " service.DumpLogs"
+				} else {
+					require.NoError(t, err)
+				}
+			}
+			assert.Equal(t, strings.Fields(want+" job.Remove service.Remove service.Close job.Close"), operations)
+		})
+	}
 
-		newRC(&c).cleanupFailedStart(ctx)
-
-		assert.Equal(t, 1, c.calls)
-		require.NoError(t, c.err)
-		assert.Equal(t, "v", c.sentinel)
-	})
-
-	t.Run("falls back to a fresh context when the input is done", func(t *testing.T) {
-		var c capture
-		ctx, cancel := context.WithCancel(context.WithValue(context.Background(), sentinel, "v"))
-		cancel()
-
-		newRC(&c).cleanupFailedStart(ctx)
-
-		assert.Equal(t, 1, c.calls)
-		require.NoError(t, c.err)
-		assert.Equal(t, "v", c.sentinel)
-	})
-
-	t.Run("no-op when there is nothing to clean up", func(t *testing.T) {
-		assert.NotPanics(t, func() { (&RunContext{}).cleanupFailedStart(context.Background()) })
-	})
+	(&RunContext{}).cleanupFailedStart(t.Context())
 }
 
 func TestWaitForServiceContainers(t *testing.T) {
-	origInterval := serviceReadyPollInterval
-	serviceReadyPollInterval = time.Millisecond
-	defer func() { serviceReadyPollInterval = origInterval }()
-
 	newRunContext := func(timeout time.Duration, services ...*serviceContainer) *RunContext {
 		return &RunContext{
 			Config:            &Config{ServiceReadyTimeout: timeout},
@@ -1165,16 +1320,26 @@ func TestWaitForServiceContainers(t *testing.T) {
 		service.AssertExpectations(t)
 	})
 
-	t.Run("waits while a service is still starting", func(t *testing.T) {
-		service := &containerMock{}
-		service.On("Inspect", mock.Anything).
-			Return(&container.Info{ID: "id", State: "running", Health: container.HealthStarting}, nil).Twice()
-		service.On("Inspect", mock.Anything).
-			Return(&container.Info{ID: "id", State: "running", Health: container.HealthHealthy}, nil).Once()
+	t.Run("polls at a fixed interval and logs starting only once", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var pollTimes []time.Duration
+			started := time.Now()
+			service := &containerMock{}
+			service.On("Inspect", mock.Anything).
+				Run(func(_ mock.Arguments) { pollTimes = append(pollTimes, time.Since(started)) }).
+				Return(&container.Info{ID: "id", State: "running", Health: container.HealthStarting}, nil).Twice()
+			service.On("Inspect", mock.Anything).
+				Run(func(_ mock.Arguments) { pollTimes = append(pollTimes, time.Since(started)) }).
+				Return(&container.Info{ID: "id", State: "running", Health: container.HealthHealthy}, nil).Once()
 
-		rc := newRunContext(0, &serviceContainer{name: "postgres", container: service})
-		require.NoError(t, rc.waitForServiceContainers()(context.Background()))
-		service.AssertExpectations(t)
+			var output bytes.Buffer
+			logger := log.New()
+			logger.SetOutput(&output)
+			require.NoError(t, newRunContext(0, &serviceContainer{name: "postgres", container: service}).waitForServiceContainers()(common.WithLogger(t.Context(), logger.WithFields(nil))))
+			assert.Equal(t, []time.Duration{0, time.Second, 2 * time.Second}, pollTimes)
+			assert.Equal(t, 1, strings.Count(output.String(), "postgres service is starting."))
+			assert.Contains(t, output.String(), "postgres service is healthy.")
+		})
 	})
 
 	t.Run("fails with the probe output when a service is unhealthy", func(t *testing.T) {

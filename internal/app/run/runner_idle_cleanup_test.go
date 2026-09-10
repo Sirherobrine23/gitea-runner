@@ -311,6 +311,7 @@ func TestRunnerOnIdleRemovesOrphanNetworks(t *testing.T) {
 	}
 
 	var swept []string
+	var sweptVolumes []string
 	var sweptCutoff time.Time
 	origRemoveOrphanNetworks := removeOrphanNetworks
 	removeOrphanNetworks = func(_ context.Context, runnerUUID string, createdBefore time.Time) error {
@@ -319,15 +320,32 @@ func TestRunnerOnIdleRemovesOrphanNetworks(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { removeOrphanNetworks = origRemoveOrphanNetworks })
+	origRemoveOrphanJobVolumes := removeOrphanJobVolumes
+	removeOrphanJobVolumes = func(_ context.Context, runnerUUID string, createdBefore time.Time) error {
+		sweptVolumes = append(sweptVolumes, runnerUUID)
+		assert.Equal(t, now.Add(-24*time.Hour), createdBefore)
+		return nil
+	}
+	t.Cleanup(func() { removeOrphanJobVolumes = origRemoveOrphanJobVolumes })
 
 	r := &Runner{uuid: "runner-1", cfg: cfg, now: func() time.Time { return now }}
 	r.OnIdle(context.Background())
 	assert.Equal(t, []string{"runner-1"}, swept)
+	assert.Equal(t, swept, sweptVolumes)
 	// a network of a job starting during the pass is younger than this and so out of scope
 	assert.Equal(t, now.Add(-24*time.Hour), sweptCutoff)
 
 	// a host-only runner has no daemon to sweep
+	origDockerReachable := dockerReachable
+	dockerReachable = func(context.Context) bool { return false }
+	t.Cleanup(func() { dockerReachable = origDockerReachable })
 	hostOnly := &Runner{uuid: "runner-2", cfg: &config.Config{Runner: cfg.Runner}, now: func() time.Time { return now }}
 	hostOnly.OnIdle(context.Background())
 	assert.Equal(t, []string{"runner-1"}, swept)
+	assert.Equal(t, swept, sweptVolumes)
+
+	dockerReachable = func(context.Context) bool { return true }
+	now = now.Add(time.Minute)
+	hostOnly.OnIdle(context.Background())
+	assert.Equal(t, []string{"runner-1", "runner-2"}, sweptVolumes)
 }

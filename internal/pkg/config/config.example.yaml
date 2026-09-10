@@ -53,11 +53,12 @@ runner:
   # scratch directories (left behind when a host cleanup delete stalls) older than
   # this duration. Setting either workdir_cleanup_age or idle_cleanup_interval to 0
   # (or any non-positive value) disables stale-directory cleanup entirely, along with
-  # the docker network cleanup below.
+  # the docker network and volume cleanup below.
   #workdir_cleanup_age: 24h
   # Cadence for the idle cleanup pass. Besides the directories above, on runners that use
-  # docker it removes the per-job networks of jobs this runner did not live to tear down,
-  # which would otherwise hold a subnet of the daemon address pool until the host is rebuilt.
+  # docker it removes the per-job networks and volumes of jobs this runner did not live to
+  # tear down, which would otherwise hold a subnet of the daemon address pool and the job's
+  # workspace contents until the host is rebuilt.
   #idle_cleanup_interval: 10m
   # The base interval for periodic log flush to the Gitea instance.
   # Logs may be sent earlier if the buffer reaches log_report_batch_size

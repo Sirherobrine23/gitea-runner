@@ -325,33 +325,6 @@ func CloneIfRequired(ctx context.Context, refName plumbing.ReferenceName, input 
 	return r, false, nil
 }
 
-func gitOptions(token string) (fetchOptions git.FetchOptions, pullOptions git.PullOptions) {
-	fetchOptions.RefSpecs = []config.RefSpec{"refs/*:refs/*", "HEAD:refs/heads/HEAD"}
-	fetchOptions.Force = true
-	pullOptions.Force = true
-
-	if token != "" {
-		auth := &http.BasicAuth{
-			Username: "token",
-			Password: token,
-		}
-		fetchOptions.Auth = auth
-		pullOptions.Auth = auth
-	}
-
-	return fetchOptions, pullOptions
-}
-
-// staleRefreshErr reports why a failed refresh must abort: the resolve and
-// checkout that follow are local and succeed on a cancelled context, which
-// would hand back the cached revision as if it were fresh.
-func staleRefreshErr(ctx context.Context, err error) error {
-	if err == nil || errors.Is(err, git.NoErrAlreadyUpToDate) {
-		return nil
-	}
-	return ctx.Err()
-}
-
 // NewGitCloneExecutor creates an executor to clone git repos
 func NewGitCloneExecutor(input NewGitCloneExecutorInput) common.Executor {
 	return func(ctx context.Context) error {
@@ -373,18 +346,21 @@ func NewGitCloneExecutor(input NewGitCloneExecutorInput) common.Executor {
 
 		isOfflineMode := input.OfflineMode
 
-		// fetch latest changes
-		fetchOptions, pullOptions := gitOptions(input.Token)
-
-		if input.InsecureSkipTLS { // For Gitea
-			fetchOptions.InsecureSkipTLS = true
-			pullOptions.InsecureSkipTLS = true
+		fetchOptions := git.FetchOptions{
+			RefSpecs:        []config.RefSpec{"refs/*:refs/*", "HEAD:refs/heads/HEAD", "refs/heads/*:refs/remotes/origin/*"},
+			Force:           true,
+			InsecureSkipTLS: input.InsecureSkipTLS,
+		}
+		if input.Token != "" {
+			fetchOptions.Auth = &http.BasicAuth{
+				Username: "token",
+				Password: input.Token,
+			}
 		}
 
 		// Action clones only ever need the tip commit, so keep a shallow cache cheap on update at depth 1 regardless of its original depth
 		// Turning action_shallow_clone off does not convert an existing shallow cache; evict it for a full clone.
-		shallow := isShallow(r)
-		if shallow {
+		if isShallow(r) {
 			fetchOptions.Depth = 1
 			if spec, ok := shallowFetchRefSpec(r, input.Ref); ok {
 				fetchOptions.RefSpecs = []config.RefSpec{spec}
@@ -392,7 +368,9 @@ func NewGitCloneExecutor(input NewGitCloneExecutorInput) common.Executor {
 		}
 
 		// A just-cloned ref is as current as a fetch would make it, and a commit hash never moves.
-		_, _, present := refRevision(r, input.Ref)
+		// TODO: revalidate a mutable ref with a conditional archive request instead, once every
+		// supported Gitea sends an ETag for them: https://github.com/go-gitea/gitea/pull/39289
+		_, present := refRevision(r, input.Ref)
 		refresh := !isOfflineMode && (!present || (reused && !plumbing.IsHash(input.Ref)))
 
 		if refresh {
@@ -415,7 +393,7 @@ func NewGitCloneExecutor(input NewGitCloneExecutorInput) common.Executor {
 			}
 		}
 
-		rev, refType, _ := refRevision(r, input.Ref)
+		rev, _ = refRevision(r, input.Ref)
 
 		if hash, err = r.ResolveRevision(rev); err != nil {
 			logger.Errorf("Unable to resolve %s: %v", input.Ref, err)
@@ -427,60 +405,18 @@ func NewGitCloneExecutor(input NewGitCloneExecutorInput) common.Executor {
 			return err
 		}
 
-		// If the hash resolved doesn't match the ref provided in a workflow then we're
-		// using a branch or tag ref, not a sha
-		//
-		// Repos on disk point to commit hashes, and need to checkout input.Ref before
-		// we try and pull down any changes
-		if hash.String() != input.Ref && refType == "branch" {
-			logger.Debugf("Provided ref is not a sha. Checking out branch before pulling changes")
-			sourceRef := plumbing.ReferenceName(path.Join("refs", "remotes", "origin", input.Ref))
-			if err = w.Checkout(&git.CheckoutOptions{
-				Branch: sourceRef,
-				Force:  true,
-			}); err != nil {
-				logger.Errorf("Unable to checkout %s: %v", sourceRef, err)
-				return err
-			}
-		}
-
 		reusedMsg := ""
-
-		switch {
-		case refresh && !shallow:
-			// In shallow mode the depth-limited fetch above already advanced the ref.
-			if err = w.PullContext(ctx, &pullOptions); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
-				logger.Debugf("Unable to pull %s: %v", refName, err)
-			}
-			if err := staleRefreshErr(ctx, err); err != nil {
-				return err
-			}
-		case isOfflineMode && reused:
+		if isOfflineMode && reused {
 			reusedMsg = " (reused in offline mode)"
 		}
 
 		logger.Debugf("Cloned %s to %s%s", input.URL, input.Dir, reusedMsg)
 
-		if hash.String() != input.Ref && refType == "branch" {
-			logger.Debugf("Provided ref is not a sha. Updating branch ref after pull")
-			if hash, err = r.ResolveRevision(rev); err != nil {
-				logger.Errorf("Unable to resolve %s: %v", input.Ref, err)
-				return err
-			}
-		}
 		if err = w.Checkout(&git.CheckoutOptions{
 			Hash:  *hash,
 			Force: true,
 		}); err != nil {
 			logger.Errorf("Unable to checkout %s: %v", *hash, err)
-			return err
-		}
-
-		if err = w.Reset(&git.ResetOptions{
-			Mode:   git.HardReset,
-			Commit: *hash,
-		}); err != nil {
-			logger.Errorf("Unable to reset to %s: %v", hash.String(), err)
 			return err
 		}
 
@@ -562,22 +498,22 @@ func pinnedRefSpec(sha string) config.RefSpec {
 }
 
 // refRevision picks the revision to check out and reports whether it resolves locally.
-func refRevision(r *git.Repository, ref string) (plumbing.Revision, string, bool) {
+func refRevision(r *git.Repository, ref string) (plumbing.Revision, bool) {
 	if plumbing.IsHash(ref) {
 		// git ignores a ref named as 40 hex digits, so a full hash always denotes the commit itself.
 		_, err := r.CommitObject(plumbing.NewHash(ref))
-		return plumbing.Revision(ref), "sha", err == nil
+		return plumbing.Revision(ref), err == nil
 	}
 	if _, err := r.Tag(ref); err == nil {
-		return plumbing.Revision(path.Join("refs", "tags", ref)), "tag", true
+		return plumbing.Revision(path.Join("refs", "tags", ref)), true
 	}
 	remoteRef := plumbing.ReferenceName(path.Join("refs", "remotes", "origin", ref))
 	if _, err := r.Reference(remoteRef, false); err == nil {
-		return plumbing.Revision(remoteRef), "branch", true
+		return plumbing.Revision(remoteRef), true
 	}
 	rev := plumbing.Revision(ref)
 	_, err := r.ResolveRevision(rev)
-	return rev, "sha", err == nil
+	return rev, err == nil
 }
 
 // isShallow reports whether the local repository was cloned with a limited depth.
